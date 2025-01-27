@@ -5,14 +5,157 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bix</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded&family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=Doto:wght@100..900&family=Inter+Tight:ital,wght@0,100..900;1,100..900&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Sono:wght@200..800&family=Staatliches&family=Victor+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@twemoji/api@latest/dist/twemoji.min.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
     <div id="game-container">
         <canvas id="game-canvas"></canvas>
+        
+        <!-- Inventory Window -->
+        <div id="inventory-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Inventory</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="inventory-grid"></div>
+            </div>
+        </div>
+
+        <!-- Shop Window -->
+        <div id="shop-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Shop</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="shop-grid"></div>
+            </div>
+        </div>
+
+        <!-- Avatar Editor Window -->
+        <div id="avatar-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Character Customization</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="avatar-editor"></div>
+            </div>
+        </div>
+
+        <!-- Settings Window -->
+        <div id="settings-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Settings</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="settings-panel">
+                    <div class="settings-section">
+                        <h3>Avatar Movement</h3>
+                        <div class="setting-item">
+                            <label for="cardinal-movement">Cardinal Directions (N,E,S,W):</label>
+                            <select id="cardinal-movement">
+                                <option value="north">North Oriented</option>
+                                <option value="east">East Oriented</option>
+                                <option value="south">South Oriented</option>
+                                <option value="west">West Oriented</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="intercardinal-movement">Intercardinal Directions (NE,SE,SW,NW):</label>
+                            <select id="intercardinal-movement">
+                                <option value="north">North Oriented</option>
+                                <option value="east">East Oriented</option>
+                                <option value="south">South Oriented</option>
+                                <option value="west">West Oriented</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Messages Window -->
+        <div id="messages-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Messages</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div class="messages-tabs">
+                    <button class="tab-button active" data-tab="chat" style="border-radius: 6px 0 0 6px;">Room Chat</button>
+                    <button class="tab-button" data-tab="dms" style="border-radius: 0;">Direct Messages</button>
+                    <button class="tab-button" data-tab="mentions" style="border-radius: 0 6px 6px 0;">Mentions</button>
+                </div>
+                <div class="messages-content">
+                    <div id="chat-history" class="tab-content active">
+                        <!-- Room chat messages will go here -->
+                    </div>
+                    <div id="direct-messages" class="tab-content">
+                        <!-- Direct messages will go here -->
+                    </div>
+                    <div id="mentions" class="tab-content">
+                        <!-- Mentions will go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Build Tools Window -->
+        <div id="build-tools-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Build Tools</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="build-tools-panel">
+                    <div class="build-tools-section">
+                        <h3>Build Height</h3>
+                        <div class="build-tool-item">
+                            <div class="build-height-controls">
+                                <label>
+                                    <input type="radio" name="build-height-mode" value="auto" checked>
+                                    Auto (Stack on top)
+                                </label>
+                                <label>
+                                    <input type="radio" name="build-height-mode" value="fixed">
+                                    Fixed Height:
+                                </label>
+                                <div class="fixed-height-input">
+                                    <input type="number" id="fixed-build-height" value="0" min="0" max="100" disabled>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="dock">
+            <div id="dock-content">
+                <!-- Icons will be added here via JavaScript -->
+            </div>
+        </div>
         <div id="ui-overlay">
-            <div id="inventory"></div>
-            
             <div id="controls-help">
                 <p>WASD - Move Camera</p>
                 <p>Q/E - Rotate View</p>
@@ -33,7 +176,23 @@
                 <span class="direction nw subdirection">NW</span>
             </div>
         </div>
+        
+        <div id="chat-container">
+            <div id="chat-input" class="chat-bubble" role="textbox" aria-multiline="false" spellcheck="true">
+                <span class="chat-prefix" contenteditable="false">P1: </span>
+                <span class="chat-content" contenteditable="true"></span>
+            </div>
+        </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/emoji-toolkit@latest/lib/js/joypixels.min.js"></script>
     <script src="game.js"></script>
+    <script>
+        window.onload = function() {
+            twemoji.parse(document.body, {
+                folder: 'svg',
+                ext: '.svg'
+            });
+        }
+    </script>
 </body>
 </html> 

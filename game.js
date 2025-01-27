@@ -1,5 +1,576 @@
+class Avatar {
+    constructor(game, gridSize) {
+        this.game = game;  // Store the game instance
+        this.scene = game.scene;  // Get the scene from the game
+        this.gridSize = 1;
+        this.position = { x: 0, y: 0, z: 0 };
+        this.cardinalOrientation = 'north';    // Default orientation for N,E,S,W
+        this.intercardinalOrientation = 'north'; // Default orientation for NE,SE,SW,NW
+        this.targetRotation = 0;
+        this.currentRotation = 0;
+        this.activeKeys = new Set();  // Track active movement keys
+        this.lastMovementDir = null;  // Store last movement direction
+        this.movementBuffer = null;  // Store buffered movement
+        this.movementTimeout = null; // Store timeout ID
+        this.MOVEMENT_DELAY = 50;    // 50ms delay to detect multi-key presses
+        this.lastCameraAngle = 0;    // Store last camera angle
+        
+        // Avatar parts
+        this.parts = {
+            head: null,
+            face: null,
+            body: null,
+            leftArm: null,
+            rightArm: null,
+            leftLeg: null,
+            rightLeg: null
+        };
+        
+        this.colors = {
+            skin: 0xffdbac,
+            shirt: 0x3498db,
+            pants: 0x2c3e50,
+            shoes: 0x34495e,
+            eyes: 0x000000
+        };
+        
+        this.chatBubble = null;
+        this.chatTimeout = null;
+        
+        this.chatBubbles = [];  // Array to store multiple chat bubbles
+        this.bubbleSpacing = 10;  // Vertical spacing between bubbles
+        this.lastAnimationTime = Date.now();  // For smooth animation timing
+        
+        this.createAvatar();
+    }
+
+    createAvatar() {
+        // Create avatar parts
+        const headGeometry = new THREE.BoxGeometry(0.45, 0.45, 0.45);
+        const bodyGeometry = new THREE.BoxGeometry(0.45, 0.6, 0.2);
+        const armGeometry = new THREE.BoxGeometry(0.2, 0.6, 0.2);
+        const legGeometry = new THREE.BoxGeometry(0.2, 0.5, 0.2);
+
+        // Materials
+        const skinMaterial = new THREE.MeshStandardMaterial({ color: this.colors.skin });
+        const shirtMaterial = new THREE.MeshStandardMaterial({ color: this.colors.shirt });
+        const pantsMaterial = new THREE.MeshStandardMaterial({ color: this.colors.pants });
+        
+        // Create face features
+        const faceGeometry = new THREE.PlaneGeometry(0.45, 0.45);
+        const faceCanvas = document.createElement('canvas');
+        faceCanvas.width = 128;
+        faceCanvas.height = 128;
+        const ctx = faceCanvas.getContext('2d');
+        
+        // Draw face
+        ctx.fillStyle = '#' + this.colors.skin.toString(16).padStart(6, '0');
+        ctx.fillRect(0, 0, 128, 128);
+        
+        // Draw eyes
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(30, 48, 12, 12);
+        ctx.fillRect(78, 48, 12, 12);
+        
+        // Draw mouth
+        ctx.fillRect(40, 88, 36, 4);
+
+        const faceTexture = new THREE.CanvasTexture(faceCanvas);
+        const faceMaterial = new THREE.MeshBasicMaterial({ map: faceTexture });
+
+        // Create mesh parts
+        this.parts.head = new THREE.Mesh(headGeometry, skinMaterial);
+        this.parts.face = new THREE.Mesh(faceGeometry, faceMaterial);
+        this.parts.body = new THREE.Mesh(bodyGeometry, shirtMaterial);
+        this.parts.leftArm = new THREE.Mesh(armGeometry, shirtMaterial);
+        this.parts.rightArm = new THREE.Mesh(armGeometry, shirtMaterial);
+        this.parts.leftLeg = new THREE.Mesh(legGeometry, pantsMaterial);
+        this.parts.rightLeg = new THREE.Mesh(legGeometry, pantsMaterial);
+
+        // Position parts relative to center
+        // Legs start at y=0 to be truly flush with floor
+        this.parts.leftLeg.position.set(-0.1, -0.25, 0);
+        this.parts.rightLeg.position.set(0.1, -0.25, 0);
+        
+        // Body starts right above legs
+        this.parts.body.position.y = 0.3;  // 0.5 (legs height) + 0.3 (half body height)
+        this.parts.leftArm.position.set(-0.325, 0.3, 0);
+        this.parts.rightArm.position.set(0.325, 0.3, 0);
+        
+        // Head at top
+        this.parts.head.position.y = 0.85;  // 0.55 (body pos) + 0.3 (half body) + 0.225 (half head)
+        this.parts.face.position.set(0, 0.85, 0.23);
+
+        // Create avatar group
+        this.group = new THREE.Group();
+        Object.values(this.parts).forEach(part => {
+            if (part) this.group.add(part);
+        });
+
+        // Add to scene
+        this.scene.add(this.group);
+        this.updatePosition();
+    }
+
+    updatePosition() {
+        this.group.position.set(
+            this.position.x,
+            this.position.y,
+            this.position.z
+        );
+    }
+
+    isIntercardinalAngle(angle) {
+        // Convert angle to degrees and normalize to 0-360
+        const degrees = ((angle * 180 / Math.PI) + 360) % 360;
+        
+        // Check if we're at NE (45°), SE (135°), SW (225°), or NW (315°)
+        // Allow for some small deviation (±10°)
+        const isNE = Math.abs(degrees - 45) <= 22.5;
+        const isSE = Math.abs(degrees - 135) <= 22.5;
+        const isSW = Math.abs(degrees - 225) <= 22.5;
+        const isNW = Math.abs(degrees - 315) <= 22.5;
+        
+        return isNE || isSE || isSW || isNW;
+    }
+
+    getCompassDirection(angle) {
+        // Convert angle to degrees and normalize to 0-360
+        // Subtract 90 degrees to align with game's coordinate system
+        const degrees = (((angle * 180 / Math.PI) - 90 + 360) % 360);
+        
+        // Get the base compass direction before any orientation adjustments
+        let baseDirection;
+        if (degrees >= 337.5 || degrees < 22.5) baseDirection = 'N';
+        else if (degrees >= 22.5 && degrees < 67.5) baseDirection = 'NE';
+        else if (degrees >= 67.5 && degrees < 112.5) baseDirection = 'E';
+        else if (degrees >= 112.5 && degrees < 157.5) baseDirection = 'SE';
+        else if (degrees >= 157.5 && degrees < 202.5) baseDirection = 'S';
+        else if (degrees >= 202.5 && degrees < 247.5) baseDirection = 'SW';
+        else if (degrees >= 247.5 && degrees < 292.5) baseDirection = 'W';
+        else if (degrees >= 292.5 && degrees < 337.5) baseDirection = 'NW';
+        else baseDirection = 'N';
+
+        // Apply orientation based on whether it's a cardinal or intercardinal direction
+        const isIntercardinal = baseDirection.length === 2; // NE, SE, SW, NW are 2 characters
+        const orientation = isIntercardinal ? this.intercardinalOrientation : this.cardinalOrientation;
+        
+        // Calculate orientation offset
+        const orientationOffsets = {
+            'north': 0,
+            'east': 90,
+            'south': 180,
+            'west': 270
+        };
+        
+        const adjustedDegrees = (degrees + orientationOffsets[orientation]) % 360;
+        
+        // Convert back to compass direction
+        if (adjustedDegrees >= 337.5 || adjustedDegrees < 22.5) return 'N';
+        if (adjustedDegrees >= 22.5 && adjustedDegrees < 67.5) return 'NE';
+        if (adjustedDegrees >= 67.5 && adjustedDegrees < 112.5) return 'E';
+        if (adjustedDegrees >= 112.5 && adjustedDegrees < 157.5) return 'SE';
+        if (adjustedDegrees >= 157.5 && adjustedDegrees < 202.5) return 'S';
+        if (adjustedDegrees >= 202.5 && adjustedDegrees < 247.5) return 'SW';
+        if (adjustedDegrees >= 247.5 && adjustedDegrees < 292.5) return 'W';
+        if (adjustedDegrees >= 292.5 && adjustedDegrees < 337.5) return 'NW';
+        return 'N';
+    }
+
+    move(direction, cameraAngle) {
+        this.lastCameraAngle = cameraAngle;  // Store camera angle
+
+        // Clear any existing movement timeout
+        if (this.movementTimeout) {
+            clearTimeout(this.movementTimeout);
+        }
+
+        // Add key to active set
+        this.activeKeys.add(direction);
+        
+        // Set up the movement buffer
+        this.movementBuffer = {
+            keys: new Set(this.activeKeys),
+            cameraAngle: cameraAngle
+        };
+
+        // Wait a short time to see if other keys are pressed
+        this.movementTimeout = setTimeout(() => {
+            this.executeMovement();
+        }, this.MOVEMENT_DELAY);
+    }
+
+    executeMovement() {
+        if (!this.movementBuffer) return;
+
+        const { keys, cameraAngle } = this.movementBuffer;
+        const compassDir = this.getCompassDirection(cameraAngle);
+        const directionMappings = {
+            'N':  { 'ArrowUp': 'N', 'ArrowRight': 'E', 'ArrowDown': 'S', 'ArrowLeft': 'W' },
+            'NE': { 'ArrowUp': 'E', 'ArrowRight': 'S', 'ArrowDown': 'W', 'ArrowLeft': 'N' },
+            'E':  { 'ArrowUp': 'E', 'ArrowRight': 'S', 'ArrowDown': 'W', 'ArrowLeft': 'N' },
+            'SE': { 'ArrowUp': 'S', 'ArrowRight': 'W', 'ArrowDown': 'N', 'ArrowLeft': 'E' },
+            'S':  { 'ArrowUp': 'S', 'ArrowRight': 'W', 'ArrowDown': 'N', 'ArrowLeft': 'E' },
+            'SW': { 'ArrowUp': 'W', 'ArrowRight': 'N', 'ArrowDown': 'E', 'ArrowLeft': 'S' },
+            'W':  { 'ArrowUp': 'W', 'ArrowRight': 'N', 'ArrowDown': 'E', 'ArrowLeft': 'S' },
+            'NW': { 'ArrowUp': 'N', 'ArrowRight': 'E', 'ArrowDown': 'S', 'ArrowLeft': 'W' }
+        };
+
+        // Calculate movement based on all buffered keys
+        let dx = 0, dz = 0;
+        let movements = new Set();
+
+        // Process all active keys
+        keys.forEach(key => {
+            const mappedDir = directionMappings[compassDir][key];
+            if (mappedDir) {
+                const movement = this.getMovementForDirection(mappedDir);
+                dx += movement.x;
+                dz += movement.z;
+                movements.add(mappedDir);
+            }
+        });
+
+        // Determine movement direction and rotation
+        let targetDir;
+        const isDiagonal = keys.size === 2;
+        
+        if (dx !== 0 && dz !== 0 && isDiagonal) {
+            // Diagonal movement (only if exactly 2 keys are pressed)
+            if (dx > 0 && dz < 0) targetDir = 'NE';
+            else if (dx > 0 && dz > 0) targetDir = 'SE';
+            else if (dx < 0 && dz > 0) targetDir = 'SW';
+            else if (dx < 0 && dz < 0) targetDir = 'NW';
+            
+            // For diagonal movement, move exactly one tile in both directions
+            dx = Math.sign(dx);
+            dz = Math.sign(dz);
+        } else if (dx !== 0 || dz !== 0) {
+            // Cardinal movement
+            if (dx > 0) targetDir = 'E';
+            else if (dx < 0) targetDir = 'W';
+            else if (dz > 0) targetDir = 'S';
+            else if (dz < 0) targetDir = 'N';
+            
+            // For cardinal movement, move exactly one tile
+            dx = Math.sign(dx);
+            dz = Math.sign(dz);
+        }
+
+        // Apply movement and rotation
+        if (targetDir) {
+            const movement = this.getMovementForDirection(targetDir);
+            // Round current position to nearest integer before adding movement
+            this.position.x = Math.round(this.position.x) + dx;
+            this.position.z = Math.round(this.position.z) + dz;
+            this.targetRotation = movement.rotation;
+            this.lastMovementDir = targetDir;
+            this.updatePosition();
+        }
+
+        // Clear the movement buffer
+        this.movementBuffer = null;
+    }
+
+    removeKey(direction) {
+        this.activeKeys.delete(direction);
+        
+        // Clear any existing movement timeout
+        if (this.movementTimeout) {
+            clearTimeout(this.movementTimeout);
+            this.movementTimeout = null;
+        }
+
+        // If there are remaining keys, trigger a new movement
+        if (this.activeKeys.size > 0) {
+            this.move([...this.activeKeys][0], this.lastCameraAngle);
+        } else if (this.lastMovementDir) {
+            // If no keys are pressed, maintain the last rotation
+            const movement = this.getMovementForDirection(this.lastMovementDir);
+            this.targetRotation = movement.rotation;
+        }
+    }
+
+    getMovementForDirection(direction) {
+        const movements = {
+            'N': { x: 0, z: -1, rotation: Math.PI },
+            'E': { x: 1, z: 0, rotation: Math.PI/2 },
+            'S': { x: 0, z: 1, rotation: 0 },
+            'W': { x: -1, z: 0, rotation: -Math.PI/2 },
+            // Add diagonal movements
+            'NE': { x: 1, z: -1, rotation: Math.PI * 0.75 },  // 135°
+            'SE': { x: 1, z: 1, rotation: Math.PI * 0.25 },   // 45°
+            'SW': { x: -1, z: 1, rotation: -Math.PI * 0.25 }, // -45°
+            'NW': { x: -1, z: -1, rotation: -Math.PI * 0.75 } // -135°
+        };
+        return movements[direction];
+    }
+
+    getDiagonalRotation(dx, dz) {
+        // Calculate rotation for diagonal movement
+        const angle = Math.atan2(dx, -dz);  // Use atan2 for correct quadrant
+        return angle;
+    }
+
+    animate(zoomLevel = 1) {
+        // Smoothly rotate towards target rotation
+        const rotationDiff = this.targetRotation - this.currentRotation;
+        
+        // Normalize the difference to be between -PI and PI
+        let normalizedDiff = rotationDiff;
+        while (normalizedDiff > Math.PI) normalizedDiff -= Math.PI * 2;
+        while (normalizedDiff < -Math.PI) normalizedDiff += Math.PI * 2;
+        
+        // Apply smooth rotation with faster speed
+        if (Math.abs(normalizedDiff) > 0.01) {
+            this.currentRotation += normalizedDiff * 0.5;
+            this.currentRotation = ((this.currentRotation % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            this.group.rotation.y = this.currentRotation;
+        } else {
+            this.currentRotation = this.targetRotation;
+            this.group.rotation.y = this.currentRotation;
+        }
+        
+        // Update chat bubbles if any exist
+        if (this.chatBubbles.length > 0) {
+            const currentTime = Date.now();
+            const deltaTime = Math.min((currentTime - this.lastAnimationTime) / 1000, 0.1); // Cap delta time
+            this.lastAnimationTime = currentTime;
+
+            // Update float offsets for all bubbles
+            const floatSpeed = 3; // pixels per second
+            this.chatBubbles.forEach((bubbleData, index) => {
+                if (index === 0) {
+                    bubbleData.floatOffset = Math.min(0, bubbleData.floatOffset - floatSpeed * deltaTime);
+                } else {
+                    const prevBubble = this.chatBubbles[index - 1];
+                    const targetOffset = prevBubble.floatOffset - bubbleData.element.offsetHeight - 10;
+                    bubbleData.floatOffset = Math.min(targetOffset, bubbleData.floatOffset - floatSpeed * deltaTime);
+                }
+            });
+
+            this.updateChatBubblesPosition(zoomLevel);
+        }
+    }
+
+    setColor(part, color) {
+        if (this.colors[part] !== undefined) {
+            this.colors[part] = color;
+            this.updateColors();
+        }
+    }
+
+    updateColors() {
+        this.parts.head.material.color.setHex(this.colors.skin);
+        this.parts.body.material.color.setHex(this.colors.shirt);
+        this.parts.leftArm.material.color.setHex(this.colors.shirt);
+        this.parts.rightArm.material.color.setHex(this.colors.shirt);
+        this.parts.leftLeg.material.color.setHex(this.colors.pants);
+        this.parts.rightLeg.material.color.setHex(this.colors.pants);
+
+        // Update face texture
+        const faceCanvas = document.createElement('canvas');
+        faceCanvas.width = 128;
+        faceCanvas.height = 128;
+        const ctx = faceCanvas.getContext('2d');
+        
+        // Draw face with updated skin color
+        ctx.fillStyle = '#' + this.colors.skin.toString(16).padStart(6, '0');
+        ctx.fillRect(0, 0, 128, 128);
+        
+        // Draw eyes
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(30, 48, 12, 12);
+        ctx.fillRect(78, 48, 12, 12);
+        
+        // Draw mouth
+        ctx.fillRect(40, 88, 36, 4);
+
+        // Update the face texture
+        const faceTexture = new THREE.CanvasTexture(faceCanvas);
+        this.parts.face.material.map = faceTexture;
+        this.parts.face.material.needsUpdate = true;
+    }
+
+    setCardinalOrientation(orientation) {
+        this.cardinalOrientation = orientation;
+    }
+
+    setIntercardinalOrientation(orientation) {
+        this.intercardinalOrientation = orientation;
+    }
+
+    formatMessage(message) {
+        // First escape any HTML to prevent XSS
+        let escaped = message.replace(/[&<>"']/g, char => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        })[char]);
+
+        // Convert emoji shortcodes to actual emoji characters using emoji-toolkit
+        escaped = joypixels.shortnameToUnicode(escaped);
+
+        // Handle color formatting at the start of message
+        const colorMatch = escaped.match(/^@([a-zA-Z]+)@(.*)/);
+        if (colorMatch) {
+            const [_, color, rest] = colorMatch;
+            // Only apply color if it's a valid CSS color name
+            const tempElement = document.createElement('div');
+            tempElement.style.color = color;
+            if (tempElement.style.color !== '') {
+                escaped = `<span style="color: ${color}">${rest}</span>`;
+            }
+        }
+
+        // Then apply markdown-style formatting
+        return escaped
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')  // **bold**
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')             // *italic*
+            .replace(/\_\_(.+?)\_\_/g, '<u>$1</u>')           // __underline__
+            .replace(/\~\~(.+?)\~\~/g, '<s>$1</s>')          // ~~strikethrough~~
+            .replace(/\|\|(.+?)\|\|/g, '<span class="spoiler">$1</span>'); // ||spoiler||
+    }
+
+    showChatMessage(message) {
+        // Create new chat bubble
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        
+        // Format the message but keep the prefix as-is
+        const formattedMessage = this.formatMessage(message);
+        bubble.innerHTML = `<span style="font-weight: bold; */margin-right: 1ch;*/">P1: </span>${formattedMessage}`;
+        
+        // Parse emojis in the bubble
+        twemoji.parse(bubble, {
+            folder: 'svg',
+            ext: '.svg'
+        });
+        
+        // Add click handlers for spoilers
+        bubble.querySelectorAll('.spoiler').forEach(spoiler => {
+            spoiler.addEventListener('click', () => {
+                spoiler.classList.add('revealed');
+            });
+        });
+
+        document.body.appendChild(bubble);
+
+        // Calculate number of lines based on bubble width and content
+        const computedStyle = window.getComputedStyle(bubble);
+        const lineHeight = parseFloat(computedStyle.lineHeight);
+        const lines = Math.max(1, Math.ceil(bubble.offsetHeight / (lineHeight || 20))); // fallback to 20px if lineHeight is 'normal'
+        bubble.style.setProperty('--lines', lines);
+
+        // Create bubble data object
+        const bubbleData = {
+            element: bubble,
+            createdAt: Date.now(),
+            timeout: null,
+            floatOffset: 0  // Current float animation offset
+        };
+
+        // Add to bubbles array
+        this.chatBubbles.push(bubbleData);
+
+        // Position the bubble above the avatar's head
+        this.updateChatBubblesPosition();
+
+        // Initial transform for centering horizontally
+        bubble.style.transform = 'translate(-50%, 0)';
+
+        // Start fade out near the end
+        bubbleData.timeout = setTimeout(() => {
+            bubble.style.opacity = '0';
+            bubble.style.transition = 'opacity 2s ease';
+            
+            // Remove bubble after fade out
+            setTimeout(() => {
+                this.removeChatBubble(bubbleData);
+            }, 2000);
+        }, 120000);  // Start fade after 2 min
+    }
+
+    removeChatBubble(bubbleData) {
+        const index = this.chatBubbles.indexOf(bubbleData);
+        if (index > -1) {
+            bubbleData.element.remove();
+            clearTimeout(bubbleData.timeout);
+            this.chatBubbles.splice(index, 1);
+            this.updateChatBubblesPosition();  // Reposition remaining bubbles
+        }
+    }
+
+    updateChatBubblesPosition(zoomLevel = 1) {
+        if (this.chatBubbles.length === 0) return;
+
+        // Sort bubbles by creation time, newest first
+        this.chatBubbles.sort((a, b) => b.createdAt - a.createdAt);
+
+        // Convert 3D position to screen coordinates
+        const vector = new THREE.Vector3();
+        vector.setFromMatrixPosition(this.group.matrixWorld);
+        
+        // Scale height based on zoom level
+        const baseHeight = 3;
+        const heightScale = Math.max(0.5, 1.5 / zoomLevel);
+        vector.y += baseHeight * heightScale;
+
+        // Project the 3D point onto the 2D screen using the game's camera
+        vector.project(this.game.camera);
+
+        // Convert to screen coordinates
+        const x = (vector.x * 0.5 + 0.5) * window.innerWidth;
+        const y = (-vector.y * 0.5 + 0.5) * window.innerHeight;
+
+        // Update base positions
+        this.chatBubbles.forEach(bubbleData => {
+            const bubble = bubbleData.element;
+            bubble.style.left = `${x}px`;
+            bubble.style.top = `${y}px`;
+        });
+
+        // Position each bubble, ensuring minimum spacing and no pull-down
+        this.chatBubbles.forEach((bubbleData, index) => {
+            if (index === 0) {
+                // Newest bubble floats up to 0
+                bubbleData.floatOffset = Math.min(0, bubbleData.floatOffset);
+            } else {
+                const prevBubble = this.chatBubbles[index - 1];
+                const minOffset = prevBubble.floatOffset - bubbleData.element.offsetHeight - 10;
+                // Only push the bubble up if it would overlap with the one below
+                if (bubbleData.floatOffset > minOffset) {
+                    bubbleData.floatOffset = minOffset;
+                }
+            }
+        });
+
+        // Apply final positions
+        this.chatBubbles.forEach(bubbleData => {
+            bubbleData.element.style.transform = `translate(-50%, ${bubbleData.floatOffset}px)`;
+        });
+    }
+
+    // Remove the old updateChatBubblePosition method as it's no longer used
+    updateChatBubblePosition() {
+        // This method is deprecated
+        return;
+    }
+}
+
 class BixGame {
     constructor() {
+        this.blocks = {};
+        this.mouse = new THREE.Vector2();
+        this.raycaster = new THREE.Raycaster();
+        this.gridSize = 32;
+        this.cameraAngle = 5 *Math.PI / 4;  // 45 degrees
+        this.targetCameraAngle = this.cameraAngle;
+        this.isInventoryDragging = false;  // Initialize the dragging flag
+        this.chatMessages = [];  // Store chat messages
+
         // Define available block types
         this.blockTypes = {
             wood: {
@@ -28,7 +599,7 @@ class BixGame {
                 material: new THREE.MeshPhysicalMaterial({ 
                     color: 0x88C6FF,
                     transparent: true,
-                    opacity: 0.3,
+                    opacity: 0.5,
                     roughness: 0,
                     metalness: 0,
                     transmission: 0.9,
@@ -60,14 +631,16 @@ class BixGame {
             },
             gold: {
                 name: 'Gold',
-                color: 0xFFD700,
+                color: 0xFFAE00,
                 material: new THREE.MeshPhysicalMaterial({ 
-                    color: 0xFFD700,
-                    roughness: 0.1,
-                    metalness: 1.0,
-                    reflectivity: 1.0,
+                    color: 0xFFAE00,
+                    roughness: 0.5,
+                    metalness: 0.6,
+                    reflectivity: 0.2,
                     clearcoat: 0.3,
-                    clearcoatRoughness: 0.3
+                    clearcoatRoughness: 0.3,
+                    envMapIntensity: 1,
+                    transmission: 0.6,
                 }),
                 key: '6'
             },
@@ -90,14 +663,14 @@ class BixGame {
             },
             obsidian: {
                 name: 'Obsidian',
-                color: 0x310062,
+                color: 0x330033,
                 material: new THREE.MeshPhysicalMaterial({ 
-                    color: 0x310062,
+                    color: 0x330033,
                     roughness: 0.1,
                     metalness: 0.0,
                     clearcoat: 1.0,
                     clearcoatRoughness: 0.1,
-                    reflectivity: 1.0
+                    reflectivity: 0.5
                 }),
                 key: '8'
             }
@@ -132,7 +705,7 @@ class BixGame {
         this.timeControlsContainer.style.color = 'white';
         this.timeControlsContainer.style.padding = '10px';
         this.timeControlsContainer.style.borderRadius = '5px';
-        this.timeControlsContainer.style.fontFamily = 'monospace';
+        this.timeControlsContainer.style.fontFamily = '"Victor Mono", monospace';
         this.timeControlsContainer.style.fontSize = '16px';
         
         // Create clock display
@@ -177,13 +750,15 @@ class BixGame {
 
         // Create pause/play button
         this.playPauseButton = document.createElement('button');
-        this.playPauseButton.textContent = '⏸️';
         this.playPauseButton.style.padding = '5px 10px';
         this.playPauseButton.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
         this.playPauseButton.style.border = 'none';
         this.playPauseButton.style.borderRadius = '3px';
         this.playPauseButton.style.cursor = 'pointer';
         this.playPauseButton.style.fontSize = '16px';
+        this.playPauseButton.style.lineHeight = '1';
+        this.playPauseButton.innerHTML = '⏸️';
+        twemoji.parse(this.playPauseButton);
         timeControl.appendChild(this.playPauseButton);
 
         // Create time slider
@@ -235,7 +810,8 @@ class BixGame {
         // Add play/pause button listener
         this.playPauseButton.addEventListener('click', () => {
             this.isPaused = !this.isPaused;
-            this.playPauseButton.textContent = this.isPaused ? '▶️' : '⏸️';
+            this.playPauseButton.innerHTML = this.isPaused ? '▶️' : '⏸️';
+            twemoji.parse(this.playPauseButton);
             if (!this.isPaused) {
                 this.lastUpdateTime = Date.now();
             }
@@ -272,10 +848,6 @@ class BixGame {
         this.scene.environment = envMap;
         pmremGenerator.dispose();
         
-        // Initialize game grid
-        this.gridSize = 64;
-        this.blocks = {};
-        
         // Setup lighting for isometric view
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
         this.scene.add(ambientLight);
@@ -304,8 +876,6 @@ class BixGame {
         this.mouse = new THREE.Vector2();
         
         // Set initial isometric camera position
-        this.cameraAngle = (5 * Math.PI) / 4; // 225 degrees - facing northwest from southeast corner
-        this.targetCameraAngle = this.cameraAngle;
         this.rotationSpeed = 0.15; // Speed for tap rotation
         this.panoramicSpeed = 0.015; // Very smooth, gentle rotation for held keys
         this.lastRotationDirection = 0;
@@ -320,6 +890,34 @@ class BixGame {
         this.zoomLevel = 1;
         this.updateCameraPosition();
         
+        // Initialize avatar before starting animation
+        this.avatar = new Avatar(this, this.gridSize);  // Pass 'this' instead of this.scene
+        
+        // Add keyboard controls for avatar with key release handling
+        document.addEventListener('keydown', (event) => {
+            // Only process movement keys if controls are enabled and not typing in chat
+            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
+                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                    event.preventDefault();
+                    this.avatar.move(event.key, this.cameraAngle);
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            // Only process movement keys if controls are enabled and not typing in chat
+            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
+                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                    event.preventDefault();
+                    this.avatar.removeKey(event.key);
+                    // Recalculate movement with remaining keys
+                    if (this.avatar.activeKeys.size > 0) {
+                        this.avatar.move([...this.avatar.activeKeys][0], this.cameraAngle);
+                    }
+                }
+            }
+        });
+
         // Setup controls
         this.setupControls();
         
@@ -328,69 +926,89 @@ class BixGame {
         
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize(), false);
+        
+        // Initialize chat input
+        this.setupChat();
     }
     
     setupControls() {
         this.keys = {};
+        this.controlsEnabled = true;  // Initialize controls as enabled by default
+        
         window.addEventListener('keydown', (e) => {
+            if (!e.key) return;  // Skip if no key property
             const key = e.key.toLowerCase();
             
-            // Only trigger on initial keydown
-            if (!this.keys[key]) {
-                this.keys[key] = true;
-                
-                // Handle rotation keys
-                if (key === 'q' || key === 'e') {
-                    const direction = key === 'q' ? -1 : 1;
-                    this.rotationKeyHoldStartTime = Date.now();
-                    this.rotate(direction);
-                }
-                
-                // Handle centering camera
-                if (key === 'c') {
-                    this.centerCamera();
-                }
-
-                // Handle block selection with number keys
-                Object.entries(this.blockTypes).forEach(([type, data]) => {
-                    if (e.key === data.key) {
-                        this.selectedBlockType = type;
-                        this.updateBlockSelector();
-                    }
-                });
-            }
-            
-            // Handle zoom with Ctrl/Cmd + +/-
+            // Always handle zoom with Ctrl/Cmd + +/-
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === '=' || e.key === '+') {
                     e.preventDefault();
                     this.zoom(1);
+                    return;
                 } else if (e.key === '-' || e.key === '_') {
                     e.preventDefault();
                     this.zoom(-1);
+                    return;
+                }
+            }
+
+            // Only process other controls if they are enabled and not typing in chat
+            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
+                // Handle WASD for camera movement
+                if (['w', 'a', 's', 'd'].includes(key)) {
+                    this.keys[key] = true;
+                }
+                
+                // Only trigger rotation keys on initial keydown
+                if (!this.keys[key]) {
+                    this.keys[key] = true;
+                    
+                    // Handle rotation keys
+                    if (key === 'q' || key === 'e') {
+                        const direction = key === 'q' ? -1 : 1;
+                        this.rotationKeyHoldStartTime = Date.now();
+                        this.rotate(direction);
+                    }
+                    
+                    // Handle centering camera
+                    if (key === 'c') {
+                        this.centerCamera();
+                    }
+
+                    // Handle block selection with number keys
+                    Object.entries(this.blockTypes).forEach(([type, data]) => {
+                        if (e.key === data.key) {
+                            this.selectedBlockType = type;
+                            this.updateBlockSelector();
+                        }
+                    });
                 }
             }
         });
 
         window.addEventListener('keyup', (e) => {
+            if (!e.key) return;  // Skip if no key property
             const key = e.key.toLowerCase();
             this.keys[key] = false;
             
-            // Handle rotation key release
-            if (key === 'q' || key === 'e') {
-                const holdDuration = Date.now() - this.rotationKeyHoldStartTime;
-                
-                if (holdDuration >= this.holdThreshold) {
-                    // If it was a hold, snap to next 45-degree increment
-                    const direction = key === 'q' ? -1 : 1;
-                    const currentAngleNorm = this.cameraAngle % (Math.PI / 4);
-                    const snapAmount = direction > 0 ? 
-                        (Math.PI / 4) - currentAngleNorm : 
-                        -currentAngleNorm;
+            // Only process controls if they are enabled and not typing in chat
+            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
+                // Handle rotation key release
+                if (key === 'q' || key === 'e') {
+                    const holdDuration = Date.now() - this.rotationKeyHoldStartTime;
                     
-                    this.targetCameraAngle = this.cameraAngle + snapAmount;
-                    this.lastRotationDirection = direction;
-                    this.rotationSpeed = 0.15; // Reset to fast rotation for snapping
+                    if (holdDuration >= this.holdThreshold) {
+                        // If it was a hold, snap to next 45-degree increment
+                        const direction = key === 'q' ? -1 : 1;
+                        const currentAngleNorm = this.cameraAngle % (Math.PI / 4);
+                        const snapAmount = direction > 0 ? 
+                            (Math.PI / 4) - currentAngleNorm : 
+                            -currentAngleNorm;
+                        
+                        this.targetCameraAngle = this.cameraAngle + snapAmount;
+                        this.lastRotationDirection = direction;
+                        this.rotationSpeed = 0.15; // Reset to fast rotation for snapping
+                    }
                 }
             }
         });
@@ -408,9 +1026,14 @@ class BixGame {
             if (e.ctrlKey || e.metaKey) {
                 e.preventDefault();
             }
-            // Handle zoom with scroll wheel/trackpad
-            const delta = -Math.sign(e.deltaY);
-            this.zoom(delta);
+
+            // Check if cursor is over any window
+            const isOverWindow = e.target.closest('.draggable-window');
+            if (!isOverWindow) {
+                // Only handle zoom if not over a window
+                const delta = -Math.sign(e.deltaY);
+                this.zoom(delta);
+            }
         }, { passive: false });
     }
 
@@ -419,7 +1042,7 @@ class BixGame {
         const newZoomLevel = this.zoomLevel * (1 + delta * zoomSpeed);
         
         // Limit zoom range
-        if (newZoomLevel >= 0.5 && newZoomLevel <= 2.0) {
+        if (newZoomLevel >= 0.4 && newZoomLevel <= 2.5) {
             this.zoomLevel = newZoomLevel;
             this.updateCameraProjection();
         }
@@ -427,12 +1050,11 @@ class BixGame {
 
     getHighestBlockAtPosition(x, z) {
         let maxY = -1;
-        for (const key in this.blocks) {
-            const [bx, by, bz] = key.split(',').map(Number);
-            if (bx === x && bz === z) {
-                maxY = Math.max(maxY, by);
+        Object.values(this.blocks).forEach(block => {
+            if (Math.round(block.position.x) === x && Math.round(block.position.z) === z) {
+                maxY = Math.max(maxY, Math.round(block.position.y));
             }
-        }
+        });
         return maxY;
     }
 
@@ -469,6 +1091,14 @@ class BixGame {
     }
 
     updatePreviewBlock() {
+        // Don't show preview block if interacting with inventory
+        const inventoryWindow = document.getElementById('inventory-window');
+        if (inventoryWindow.contains(document.activeElement) || 
+            this.isInventoryDragging) {
+            this.previewBlock.visible = false;
+            return;
+        }
+
         this.raycaster.setFromCamera(this.mouse, this.camera);
         // Only check intersections with floor blocks
         const floorBlocks = Object.values(this.blocks).filter(block => block.position.y === -0.6);
@@ -479,18 +1109,23 @@ class BixGame {
             const floorX = Math.round(intersect.point.x);
             const floorZ = Math.round(intersect.point.z);
             
-            // Find the height of the highest block at this position
-            const highestY = this.getHighestBlockAtPosition(floorX, floorZ);
-            const nextY = highestY + 1;
+            // Get the build height based on mode
+            let buildY;
+            if (this.buildHeightMode === 'auto') {
+                const highestY = this.getHighestBlockAtPosition(floorX, floorZ);
+                buildY = highestY + 1;
+            } else {
+                buildY = this.fixedBuildHeight;
+            }
             
             // Additional bounds check to ensure we're within the grid
             if (floorX >= -this.gridSize/2 && 
                 floorX < this.gridSize/2 && 
                 floorZ >= -this.gridSize/2 && 
                 floorZ < this.gridSize/2) {
-                const key = `${floorX},${nextY},${floorZ}`;
+                const key = `${floorX},${buildY},${floorZ}`;
                 if (!this.blocks[key]) {
-                    this.previewBlock.position.set(floorX, nextY, floorZ);
+                    this.previewBlock.position.set(floorX, buildY, floorZ);
                     this.previewBlock.visible = true;
                     return;
                 }
@@ -585,6 +1220,9 @@ class BixGame {
     }
     
     updateCamera() {
+        // Only process camera movement if controls are enabled
+        if (!this.controlsEnabled) return;
+
         const moveSpeed = 0.5;
         const moveX = (this.keys['d'] ? 1 : 0) - (this.keys['a'] ? 1 : 0);
         const moveZ = (this.keys['s'] ? 1 : 0) - (this.keys['w'] ? 1 : 0);
@@ -618,73 +1256,6 @@ class BixGame {
     onWindowResize() {
         this.updateCameraProjection();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-    }
-    
-    animate() {
-        requestAnimationFrame(() => this.animate());
-        
-        // Update day/night cycle
-        this.updateDayNightCycle();
-        
-        // Check for held rotation keys
-        if (this.keys['q'] || this.keys['e']) {
-            const holdDuration = Date.now() - this.rotationKeyHoldStartTime;
-            
-            if (holdDuration >= this.holdThreshold) {
-                // Smooth panoramic rotation while held
-                const direction = this.keys['q'] ? -1 : 1;
-                this.cameraAngle += direction * this.panoramicSpeed;
-                this.cameraAngle = (this.cameraAngle + Math.PI * 2) % (Math.PI * 2);
-                this.targetCameraAngle = this.cameraAngle;
-                this.lastRotationDirection = direction; // Keep track for snap rotation
-                this.updateCameraPosition();
-            }
-        }
-        
-        // Normal rotation animation for taps or snapping
-        if (this.cameraAngle !== this.targetCameraAngle) {
-            let angleDiff = this.targetCameraAngle - this.cameraAngle;
-            
-            // Adjust the difference based on last rotation direction to ensure continuous rotation
-            if (this.lastRotationDirection !== 0) {
-                if (this.lastRotationDirection > 0 && angleDiff < 0) {
-                    angleDiff += Math.PI * 2;
-                } else if (this.lastRotationDirection < 0 && angleDiff > 0) {
-                    angleDiff -= Math.PI * 2;
-                }
-            }
-            
-            // Apply smooth rotation
-            if (Math.abs(angleDiff) > 0.01) {
-                this.cameraAngle += angleDiff * this.rotationSpeed;
-                this.cameraAngle = (this.cameraAngle + Math.PI * 2) % (Math.PI * 2);
-                this.updateCameraPosition();
-            } else {
-                this.cameraAngle = this.targetCameraAngle;
-                this.updateCameraPosition();
-                this.lastRotationDirection = 0;
-            }
-        }
-
-        // Animate camera target movement
-        if (!this.cameraTarget.equals(this.targetCameraTarget)) {
-            const dx = this.targetCameraTarget.x - this.cameraTarget.x;
-            const dy = this.targetCameraTarget.y - this.cameraTarget.y;
-            const dz = this.targetCameraTarget.z - this.cameraTarget.z;
-            
-            if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01 || Math.abs(dz) > 0.01) {
-                this.cameraTarget.x += dx * this.cameraMoveSpeed;
-                this.cameraTarget.y += dy * this.cameraMoveSpeed;
-                this.cameraTarget.z += dz * this.cameraMoveSpeed;
-                this.updateCameraPosition();
-            } else {
-                this.cameraTarget.copy(this.targetCameraTarget);
-                this.updateCameraPosition();
-            }
-        }
-
-        this.updateCamera();
-        this.renderer.render(this.scene, this.camera);
     }
 
     updateCameraProjection() {
@@ -729,34 +1300,190 @@ class BixGame {
     }
 
     initBlockSelector() {
-        const inventory = document.getElementById('inventory');
-        inventory.innerHTML = '';
+        // Initialize windows configuration
+        this.windows = {
+            inventory: {
+                id: 'inventory-window',
+                icon: '📦',
+                title: 'Inventory'
+            },
+            shop: {
+                id: 'shop-window',
+                icon: '🛍️',
+                title: 'Shop'
+            },
+            buildTools: {
+                id: 'build-tools-window',
+                icon: '🏗️',
+                title: 'Build Tools'
+            },
+            messages: {
+                id: 'messages-window',
+                icon: '💬',
+                title: 'Messages'
+            },
+            avatar: {
+                id: 'avatar-window',
+                icon: '👤',
+                title: 'Character'
+            },
+            settings: {
+                id: 'settings-window',
+                icon: '⚙️',
+                title: 'Settings'
+            }
+        };
+
+        // Track active window
+        this.activeWindow = null;
+
+        // Initialize dock
+        const dockContent = document.getElementById('dock-content');
         
-        // Create block type buttons
-        Object.entries(this.blockTypes).forEach(([type, data]) => {
-            const button = document.createElement('button');
-            button.className = 'block-button';
-            button.innerHTML = `${data.name} (${data.key})`;
-            button.style.backgroundColor = '#' + data.color.toString(16).padStart(6, '0');
-            button.style.color = this.getContrastColor(data.color);
+        // Create dock icons for all windows
+        Object.entries(this.windows).forEach(([key, window]) => {
+            const dockItem = document.createElement('div');
+            dockItem.className = 'dock-item';
+            dockItem.innerHTML = `<span style="color: white; font-size: 20px;">${window.icon}</span>`;
+            dockItem.setAttribute('data-window', key);
             
-            button.addEventListener('click', () => {
-                this.selectedBlockType = type;
-                this.updateBlockSelector();
+            // Add click handler
+            dockItem.addEventListener('click', () => {
+                this.toggleWindow(key);
             });
             
-            inventory.appendChild(button);
+            dockContent.appendChild(dockItem);
         });
+
+        // Setup all windows
+        Object.entries(this.windows).forEach(([key, window]) => {
+            const windowElement = document.getElementById(window.id);
+            const closeButton = windowElement.querySelector('.close-button');
+            
+            // Make window draggable
+            this.makeWindowDraggable(windowElement);
+            
+            // Add close button handler
+            closeButton.addEventListener('click', () => {
+                this.hideWindow(key);
+            });
+
+            // Add click handler to bring window to front
+            windowElement.addEventListener('mousedown', (e) => {
+                if (!windowElement.classList.contains('active')) {
+                    this.setActiveWindow(key);
+                }
+            });
+        });
+
+        // Initialize inventory specific functionality
+        this.initInventory();
+        this.initShop();
+        this.initAvatarEditor();
+
+        // Initialize settings specific functionality
+        this.initSettings();
+
+        // Initialize messages specific functionality
+        this.initMessages();
+
+        // Initialize build tools specific functionality
+        this.initBuildTools();
+    }
+
+    setActiveWindow(key) {
+        // Remove active class from all windows
+        document.querySelectorAll('.draggable-window').forEach(window => {
+            window.classList.remove('active');
+        });
+
+        if (key) {
+            const windowElement = document.getElementById(this.windows[key].id);
+            windowElement.classList.add('active');
+            windowElement.style.zIndex = this.getTopZIndex() + 1;
+            this.activeWindow = key;
+        } else {
+            this.activeWindow = null;
+        }
+    }
+
+    toggleWindow(key) {
+        const windowElement = document.getElementById(this.windows[key].id);
+        const isVisible = windowElement.style.display === 'block';
+        const isActive = this.activeWindow === key;
+
+        if (!isVisible) {
+            // If window is hidden, show it and make it active
+            this.showWindow(key);
+            this.setActiveWindow(key);
+        } else if (isActive) {
+            // If window is visible and active, hide it
+            this.hideWindow(key);
+        } else {
+            // If window is visible but not active, make it active
+            this.setActiveWindow(key);
+        }
+    }
+
+    showWindow(key) {
+        const windowElement = document.getElementById(this.windows[key].id);
+        const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
         
-        this.updateBlockSelector();
+        // If the window hasn't been positioned yet, center it
+        if (!windowElement.style.left || !windowElement.style.top) {
+            // Need to make it temporarily visible to get dimensions
+            windowElement.style.visibility = 'hidden';
+            windowElement.style.display = 'block';
+            
+            const rect = windowElement.getBoundingClientRect();
+            const centerX = (window.innerWidth - rect.width) / 2;
+            const centerY = (window.innerHeight - rect.height) / 2;
+            
+            windowElement.style.left = `${centerX}px`;
+            windowElement.style.top = `${centerY}px`;
+            windowElement.style.visibility = 'visible';
+        } else {
+            windowElement.style.display = 'block';
+        }
+
+        dockItem.classList.add('active');
+        
+        // Add indicator
+        if (!dockItem.querySelector('.indicator')) {
+            const indicator = document.createElement('div');
+            indicator.className = 'indicator';
+            dockItem.appendChild(indicator);
+        }
+    }
+
+    hideWindow(key) {
+        const windowElement = document.getElementById(this.windows[key].id);
+        const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
+        
+        windowElement.style.display = 'none';
+        dockItem.classList.remove('active');
+        
+        // Remove indicator
+        const indicator = dockItem.querySelector('.indicator');
+        if (indicator) {
+            indicator.remove();
+        }
+
+        // If this was the active window, clear active state
+        if (this.activeWindow === key) {
+            this.setActiveWindow(null);
+        }
     }
 
     updateBlockSelector() {
-        // Update button states
-        const buttons = document.querySelectorAll('.block-button');
-        buttons.forEach(button => {
-            const isSelected = button.textContent.startsWith(this.blockTypes[this.selectedBlockType].name);
-            button.classList.toggle('selected', isSelected);
+        // Update selected state in inventory grid
+        const items = document.querySelectorAll('.inventory-item');
+        items.forEach(item => {
+            if (item.getAttribute('data-block-type') === this.selectedBlockType) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
         });
     }
 
@@ -1119,6 +1846,477 @@ class BixGame {
         // Convert current time to minutes since midnight
         const minutes = this.gameTime.getHours() * 60 + this.gameTime.getMinutes();
         this.timeSlider.value = minutes;
+    }
+
+    getTopZIndex() {
+        return Math.max(
+            1000,
+            ...Array.from(document.querySelectorAll('.draggable-window'))
+                .map(el => parseInt(getComputedStyle(el).zIndex) || 0)
+        );
+    }
+
+    initInventory() {
+        const inventoryGrid = document.getElementById('inventory-grid');
+        
+        // Create inventory grid items
+        Object.entries(this.blockTypes).forEach(([type, block]) => {
+            const item = document.createElement('div');
+            item.className = 'inventory-item';
+            item.setAttribute('data-block-type', type);
+            
+            const preview = document.createElement('div');
+            preview.style.width = '30px';
+            preview.style.height = '30px';
+            preview.style.backgroundColor = '#' + block.color.toString(16).padStart(6, '0');
+            preview.style.border = '1px solid rgba(255, 255, 255, 0.3)';
+            preview.style.borderRadius = '4px';
+            
+            item.appendChild(preview);
+            item.title = `${block.name} (${block.key})`;
+            
+            item.addEventListener('click', () => {
+                this.selectedBlockType = type;
+                this.updateBlockSelector();
+            });
+            
+            inventoryGrid.appendChild(item);
+        });
+
+        // Show initial selection
+        this.updateBlockSelector();
+    }
+
+    initShop() {
+        const shopGrid = document.getElementById('shop-grid');
+        // Add shop items here
+        const shopItems = [
+            { name: 'Premium Blocks Pack', price: '500', icon: '🎨' },
+            { name: 'Special Effects', price: '1000', icon: '✨' },
+            { name: 'Custom Colors', price: '750', icon: '🎯' },
+            { name: 'Terrain Tools', price: '1500', icon: '⛰️' }
+        ];
+
+        shopItems.forEach(item => {
+            const shopItem = document.createElement('div');
+            shopItem.className = 'inventory-item';
+            shopItem.style.width = 'auto';
+            shopItem.style.height = 'auto';
+            shopItem.style.padding = '12px';
+            shopItem.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                    <span style="font-size: 24px;">${item.icon}</span>
+                    <div style="text-align: center;">
+                        <div>${item.name}</div>
+                        <div style="color: #ffd700;">🪙 ${item.price}</div>
+                    </div>
+                </div>
+            `;
+            shopGrid.appendChild(shopItem);
+        });
+    }
+
+    initAvatarEditor() {
+        const avatarEditor = document.getElementById('avatar-editor');
+        avatarEditor.innerHTML = `
+            <div class="avatar-customization">
+                <div class="color-section">
+                    <h3>Skin Color</h3>
+                    <input type="color" id="skin-color" value="#ffdbac">
+                </div>
+                <div class="color-section">
+                    <h3>Shirt Color</h3>
+                    <input type="color" id="shirt-color" value="#3498db">
+                </div>
+                <div class="color-section">
+                    <h3>Pants Color</h3>
+                    <input type="color" id="pants-color" value="#2c3e50">
+                </div>
+            </div>
+        `;
+
+        // Add color change listeners
+        document.getElementById('skin-color').addEventListener('input', (e) => {
+            this.avatar.setColor('skin', parseInt(e.target.value.substring(1), 16));
+        });
+
+        document.getElementById('shirt-color').addEventListener('input', (e) => {
+            this.avatar.setColor('shirt', parseInt(e.target.value.substring(1), 16));
+        });
+
+        document.getElementById('pants-color').addEventListener('input', (e) => {
+            this.avatar.setColor('pants', parseInt(e.target.value.substring(1), 16));
+        });
+    }
+
+    initSettings() {
+        const cardinalSelect = document.getElementById('cardinal-movement');
+        const intercardinalSelect = document.getElementById('intercardinal-movement');
+        
+        // Prevent letter keys from affecting dropdowns
+        const preventLetterKeys = (e) => {
+            // If it's a letter key (a-z or A-Z)
+            if (/^[a-zA-Z]$/.test(e.key)) {
+                e.preventDefault();
+            }
+        };
+
+        cardinalSelect.addEventListener('keydown', preventLetterKeys);
+        intercardinalSelect.addEventListener('keydown', preventLetterKeys);
+        
+        // Add change listeners for both movement directions
+        cardinalSelect.addEventListener('change', (e) => {
+            this.avatar.setCardinalOrientation(e.target.value);
+        });
+        
+        intercardinalSelect.addEventListener('change', (e) => {
+            this.avatar.setIntercardinalOrientation(e.target.value);
+        });
+    }
+
+    initMessages() {
+        const tabButtons = document.querySelectorAll('.tab-button');
+        
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                // Remove active class from all buttons and content
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+                
+                // Add active class to clicked button and corresponding content
+                button.classList.add('active');
+                const tabId = button.getAttribute('data-tab');
+                const tabContent = document.querySelector(`#${tabId === 'chat' ? 'chat-history' : tabId === 'dms' ? 'direct-messages' : 'mentions'}`);
+                tabContent.classList.add('active');
+            });
+        });
+    }
+
+    initBuildTools() {
+        // Initialize build height mode
+        this.buildHeightMode = 'auto';
+        this.fixedBuildHeight = 0;
+
+        const buildHeightModeInputs = document.querySelectorAll('input[name="build-height-mode"]');
+        const fixedHeightInput = document.getElementById('fixed-build-height');
+
+        buildHeightModeInputs.forEach(input => {
+            input.addEventListener('change', (e) => {
+                this.buildHeightMode = e.target.value;
+                fixedHeightInput.disabled = this.buildHeightMode === 'auto';
+            });
+        });
+
+        fixedHeightInput.addEventListener('change', (e) => {
+            this.fixedBuildHeight = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+            e.target.value = this.fixedBuildHeight;
+        });
+    }
+
+    makeWindowDraggable(windowElement) {
+        const header = windowElement.querySelector('.window-header');
+        let isDragging = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        
+        header.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.window-controls') === null) {
+                isDragging = true;
+                this.isInventoryDragging = true;
+                initialX = e.clientX - windowElement.offsetLeft;
+                initialY = e.clientY - windowElement.offsetTop;
+                
+                // Find the window key and make it active
+                const key = Object.entries(this.windows).find(([k, w]) => w.id === windowElement.id)?.[0];
+                if (key) {
+                    this.setActiveWindow(key);
+                }
+            }
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                
+                currentX = Math.max(0, Math.min(currentX, window.innerWidth - windowElement.offsetWidth));
+                currentY = Math.max(0, Math.min(currentY, window.innerHeight - windowElement.offsetHeight));
+                
+                windowElement.style.left = currentX + 'px';
+                windowElement.style.top = currentY + 'px';
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            this.isInventoryDragging = false;
+        });
+    }
+
+    setupChat() {
+        const chatInput = document.getElementById('chat-input');
+        const chatContent = chatInput.querySelector('.chat-content');
+        const chatHistory = document.getElementById('chat-history');
+        
+        const MAX_CHARS = 100;  // Maximum characters allowed
+
+        // Ensure proper focus behavior
+        const ensureFocus = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // If content isn't focused, focus it and place cursor at end
+            if (document.activeElement !== chatContent) {
+                chatContent.focus();
+                // Place cursor at end of content
+                const range = document.createRange();
+                const selection = window.getSelection();
+                range.selectNodeContents(chatContent);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        };
+
+        // Add click handlers to both the container and content
+        chatInput.addEventListener('click', ensureFocus);
+        chatContent.addEventListener('click', (e) => e.stopPropagation());
+
+        // Handle input to enforce character limit
+        chatContent.addEventListener('input', (e) => {
+            const text = chatContent.textContent;
+            if (text.length > MAX_CHARS) {
+                e.preventDefault();
+                chatContent.textContent = text.slice(0, MAX_CHARS);
+                // Restore cursor position at the end
+                const range = document.createRange();
+                const selection = window.getSelection();
+                range.selectNodeContents(chatContent);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        });
+
+        // Prevent line breaks and handle paste
+        chatContent.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+            }
+        });
+
+        // Stop paste event from bubbling up from chatInput
+        chatInput.addEventListener('paste', (e) => {
+            e.stopPropagation();
+        });
+
+        // Handle paste events, converting line breaks to spaces
+        chatContent.addEventListener('paste', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            let text = e.clipboardData.getData('text/plain');
+            // Convert line breaks to spaces, ensuring there's exactly one space between words
+            text = text.replace(/[\r\n\s]+/g, ' ').trim();
+            const currentLength = chatContent.textContent.length;
+            const availableSpace = MAX_CHARS - currentLength;
+            if (availableSpace > 0) {
+                document.execCommand('insertText', false, text.slice(0, availableSpace));
+            }
+        });
+
+        // Create new messages button
+        const newMessagesButton = document.createElement('button');
+        newMessagesButton.className = 'new-messages-button';
+        newMessagesButton.textContent = 'NEW MESSAGES';
+        chatHistory.appendChild(newMessagesButton);
+        
+        // Track if user has scrolled up
+        let isUserScrolled = false;
+        let lastScrollHeight = chatHistory.scrollHeight;
+        
+        // Handle scroll events
+        chatHistory.addEventListener('scroll', () => {
+            const isScrolledToBottom = chatHistory.scrollHeight - chatHistory.clientHeight <= chatHistory.scrollTop + 1;
+            
+            if (isScrolledToBottom) {
+                isUserScrolled = false;
+                newMessagesButton.classList.remove('visible');
+            } else {
+                isUserScrolled = true;
+            }
+        });
+        
+        // Handle new messages button click
+        newMessagesButton.addEventListener('click', () => {
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            newMessagesButton.classList.remove('visible');
+            isUserScrolled = false;
+        });
+
+        // Handle chat input
+        chatInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                const message = chatContent.textContent.trim();
+                
+                if (message) {
+                    // Show floating chat bubble
+                    this.avatar.showChatMessage(message);
+                    
+                    // Add message to chat history
+                    const messageObj = {
+                        sender: 'P1',
+                        content: message,
+                        timestamp: new Date()
+                    };
+                    this.chatMessages.push(messageObj);
+                    
+                    // Create and append message element
+                    const messageElement = document.createElement('div');
+                    messageElement.className = 'chat-message';
+                    messageElement.innerHTML = `<span style="font-weight: bold;">P1: </span>${this.avatar.formatMessage(message)}`;
+                    
+                    // Parse emojis in the message
+                    twemoji.parse(messageElement, {
+                        folder: 'svg',
+                        ext: '.svg'
+                    });
+                    
+                    // Add click handlers for spoilers in the chat history
+                    messageElement.querySelectorAll('.spoiler').forEach(spoiler => {
+                        spoiler.addEventListener('click', () => {
+                            spoiler.classList.add('revealed');
+                        });
+                    });
+                    
+                    chatHistory.appendChild(messageElement);
+                    
+                    // Handle scrolling behavior
+                    if (!isUserScrolled) {
+                        chatHistory.scrollTop = chatHistory.scrollHeight;
+                    } else if (chatHistory.scrollHeight > lastScrollHeight) {
+                        newMessagesButton.classList.add('visible');
+                    }
+                    
+                    lastScrollHeight = chatHistory.scrollHeight;
+                    
+                    // Clear input
+                    chatContent.textContent = '';
+                }
+            }
+        });
+
+        // Prevent game controls when typing
+        const disableControls = () => {
+            this.controlsEnabled = false;
+            // Clear any held keys to prevent stuck movement
+            this.keys = {};
+        };
+
+        const enableControls = () => {
+            this.controlsEnabled = true;
+        };
+
+        chatInput.addEventListener('focusin', disableControls);
+        chatContent.addEventListener('focusin', disableControls);
+        chatInput.addEventListener('focusout', enableControls);
+        chatContent.addEventListener('focusout', enableControls);
+
+        // Handle paste to strip formatting
+        chatInput.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData('text/plain');
+            document.execCommand('insertText', false, text);
+        });
+    }
+
+    formatTime(date) {
+        const hours = date.getHours();
+        const minutes = date.getMinutes();
+        const period = hours >= 12 ? 'PM' : 'AM';
+        const hour12 = hours % 12 || 12;
+        return `${hour12}:${minutes.toString().padStart(2, '0')} ${period}`;
+    }
+
+    setEmojiContent(element, emoji) {
+        element.textContent = emoji;
+        twemoji.parse(element, {
+            folder: 'svg',
+            ext: '.svg'
+        });
+    }
+
+    animate() {
+        requestAnimationFrame(() => this.animate());
+        
+        // Update day/night cycle
+        this.updateDayNightCycle();
+        
+        // Update avatar rotation
+        this.avatar.animate(this.zoomLevel);
+        
+        // Check for held rotation keys only if controls are enabled
+        if (this.controlsEnabled && (this.keys['q'] || this.keys['e'])) {
+            const holdDuration = Date.now() - this.rotationKeyHoldStartTime;
+            
+            if (holdDuration >= this.holdThreshold) {
+                // Smooth panoramic rotation while held
+                const direction = this.keys['q'] ? -1 : 1;
+                this.cameraAngle += direction * this.panoramicSpeed;
+                this.cameraAngle = (this.cameraAngle + Math.PI * 2) % (Math.PI * 2);
+                this.targetCameraAngle = this.cameraAngle;
+                this.lastRotationDirection = direction; // Keep track for snap rotation
+                this.updateCameraPosition();
+            }
+        }
+        
+        // Normal rotation animation for taps or snapping
+        if (this.cameraAngle !== this.targetCameraAngle) {
+            let angleDiff = this.targetCameraAngle - this.cameraAngle;
+            
+            // Adjust the difference based on last rotation direction to ensure continuous rotation
+            if (this.lastRotationDirection !== 0) {
+                if (this.lastRotationDirection > 0 && angleDiff < 0) {
+                    angleDiff += Math.PI * 2;
+                } else if (this.lastRotationDirection < 0 && angleDiff > 0) {
+                    angleDiff -= Math.PI * 2;
+                }
+            }
+            
+            // Apply smooth rotation
+            if (Math.abs(angleDiff) > 0.01) {
+                this.cameraAngle += angleDiff * this.rotationSpeed;
+                this.cameraAngle = (this.cameraAngle + Math.PI * 2) % (Math.PI * 2);
+                this.updateCameraPosition();
+            } else {
+                this.cameraAngle = this.targetCameraAngle;
+                this.updateCameraPosition();
+                this.lastRotationDirection = 0;
+            }
+        }
+        
+        // Animate camera target movement
+        if (!this.cameraTarget.equals(this.targetCameraTarget)) {
+            const dx = this.targetCameraTarget.x - this.cameraTarget.x;
+            const dy = this.targetCameraTarget.y - this.cameraTarget.y;
+            const dz = this.targetCameraTarget.z - this.cameraTarget.z;
+            
+            if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01 || Math.abs(dz) > 0.01) {
+                this.cameraTarget.x += dx * this.cameraMoveSpeed;
+                this.cameraTarget.y += dy * this.cameraMoveSpeed;
+                this.cameraTarget.z += dz * this.cameraMoveSpeed;
+                this.updateCameraPosition();
+            } else {
+                this.cameraTarget.copy(this.targetCameraTarget);
+                this.updateCameraPosition();
+            }
+        }
+
+        this.updateCamera();
+        this.renderer.render(this.scene, this.camera);
     }
 }
 
