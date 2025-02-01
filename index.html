@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bix</title>
+    <title>Bix 0.0.93</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,8 +13,37 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
+    <div id="loading-screen">
+        <div class="loading-content">
+            <h2 class="logo-style">BIX</h2>
+            <div class="loading-progress">
+                <div class="progress-bar"></div>
+            </div>
+            <div class="loading-text">LOADING...</div>
+        </div>
+        <div class="version-text" style="font-size: 12px; font-variation-settings: 'wght' 700; color: #888; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">BIX BETA v0.0.93</div>
+    </div>
+    
+    <div id="display-name-modal" class="modal">
+        <div class="modal-content" style="margin-bottom: 16px;">
+            <h2>Welcome to BIX! 👋</h2>
+            <div class="input-group">
+                <input type="text" id="display-name-input" maxlength="20" placeholder="Display Name" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+                <button id="display-name-submit">START</button>
+            </div>
+        </div>
+        <div class="modal-content" style="margin-top: 16px; box-shadow: none; background: none; padding: 0 24px;">
+            <p><strong>BIX BETA v0.0.93</strong></p>
+            <p>Please report any bugs or issues in the <strong><a href="https://discord.gg/Z6WhWFfCRw" target="_blank" style="color: #5865F2; text-decoration: none;">Discord server</a></strong>.</p><br>
+            <p>By clicking START, you agree to:</p>
+            <p>☑️ <strong><a href="/docs/terms.md" target="_blank" style="color: #5865F2; text-decoration: none;">BIX Terms of Service</a></strong></p>
+            <p>☑️ <strong><a href="/docs/privacy.md" target="_blank" style="color: #5865F2; text-decoration: none;">BIX Privacy Policy</a></strong></p><br>
+        </div>
+    </div>
+    
     <div id="game-container">
         <canvas id="game-canvas"></canvas>
+        <canvas id="paperdoll-canvas" class="paperdoll-view"></canvas>
         
         <!-- Inventory Window -->
         <div id="inventory-window" class="draggable-window">
@@ -63,28 +92,135 @@
                     <button class="close-button">×</button>
                 </div>
             </div>
+            <div class="window-content settings-layout">
+                <div class="settings-sidebar">
+                    <div class="sidebar-item active" data-page="movement">
+                        <span class="sidebar-icon">🎮</span>
+                        Movement
+                    </div>
+                    <div class="sidebar-item" data-page="time">
+                        <span class="sidebar-icon">⏰</span>
+                        Time Controls
+                    </div>
+                    <div class="sidebar-item" data-page="graphics">
+                        <span class="sidebar-icon">🎨</span>
+                        Graphics
+                    </div>
+                    <div class="sidebar-item" data-page="audio">
+                        <span class="sidebar-icon">🔊</span>
+                        Audio
+                    </div>
+                    <div class="sidebar-item" data-page="controls">
+                        <span class="sidebar-icon">⌨️</span>
+                        Controls
+                    </div>
+                    <div class="sidebar-item" data-page="account">
+                        <span class="sidebar-icon">🔑</span>
+                        Account
+                    </div>
+                    <div class="sidebar-item" data-page="devtools">
+                        <span class="sidebar-icon">🛠️</span>
+                        Devtools
+                    </div>
+                    <div class="sidebar-item" data-page="about">
+                        <span class="sidebar-icon">ℹ️</span>
+                        About
+                    </div>
+                </div>
+                <div class="settings-pages">
+                    <div class="settings-page active" id="movement-page">
+                        <div class="settings-section">
+                            <h3>Avatar Movement</h3>
+                            <div class="setting-item">
+                                <label for="cardinal-movement">Cardinal Directions (N,E,S,W):</label>
+                                <select id="cardinal-movement">
+                                    <option value="north">North Oriented</option>
+                                    <option value="east">East Oriented</option>
+                                    <option value="south">South Oriented</option>
+                                    <option value="west">West Oriented</option>
+                                </select>
+                            </div>
+                            <div class="setting-item">
+                                <label for="intercardinal-movement">Intercardinal Directions (NE,SE,SW,NW):</label>
+                                <select id="intercardinal-movement">
+                                    <option value="north">North Oriented</option>
+                                    <option value="east">East Oriented</option>
+                                    <option value="south">South Oriented</option>
+                                    <option value="west">West Oriented</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-page" id="time-page">
+                        <div class="settings-section">
+                            <h3>Time Controls</h3>
+                            <div id="time-controls"></div>
+                        </div>
+                    </div>
+                    <div class="settings-page" id="graphics-page">
+                        <div class="settings-section">
+                            <h3>Graphics Settings</h3>
+                            <!-- Add graphics settings here -->
+                        </div>
+                    </div>
+                    <div class="settings-page" id="audio-page">
+                        <div class="settings-section">
+                            <h3>Audio Settings</h3>
+                            <!-- Add audio settings here -->
+                        </div>
+                    </div>
+                    <div class="settings-page" id="controls-page">
+                        <div class="settings-section">
+                            <h3>Control Settings</h3>
+                            <!-- Add control settings here -->
+                        </div>
+                    </div>
+                    <div class="settings-page" id="account-page">
+                        <div class="settings-section">
+                            <h3>Account Settings</h3>
+                            <div class="setting-item">
+                                <label for="display-name-setting">Display Name:</label>
+                                <div class="setting-input-group">
+                                    <input type="text" id="display-name-setting" maxlength="20" class="setting-input">
+                                    <button id="save-display-name" class="setting-button">Save</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-page" id="devtools-page">
+                        <div class="settings-section">
+                            <h3>Devtools</h3>
+                            <div class="setting-item">
+                                <label for="devtools-mode">Devtools Mode:</label>
+                                <select id="devtools-mode">
+                                    <option value="off">Off</option>
+                                    <option value="on">On</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-page" id="about-page">
+                        <div class="settings-section">
+                            <h3>BIX</h3>
+                            <p>v 0.0.9</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigator Window -->
+        <div id="navigator-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Navigator</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
             <div class="window-content">
-                <div id="settings-panel">
-                    <div class="settings-section">
-                        <h3>Avatar Movement</h3>
-                        <div class="setting-item">
-                            <label for="cardinal-movement">Cardinal Directions (N,E,S,W):</label>
-                            <select id="cardinal-movement">
-                                <option value="north">North Oriented</option>
-                                <option value="east">East Oriented</option>
-                                <option value="south">South Oriented</option>
-                                <option value="west">West Oriented</option>
-                            </select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="intercardinal-movement">Intercardinal Directions (NE,SE,SW,NW):</label>
-                            <select id="intercardinal-movement">
-                                <option value="north">North Oriented</option>
-                                <option value="east">East Oriented</option>
-                                <option value="south">South Oriented</option>
-                                <option value="west">West Oriented</option>
-                            </select>
-                        </div>
+                <div id="navigator-panel">
+                    <div class="navigator-section">
+                        <h3>Navigator</h3>
                     </div>
                 </div>
             </div>
@@ -114,6 +250,34 @@
                     <div id="mentions" class="tab-content">
                         <!-- Mentions will go here -->
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- People Window -->
+        <div id="people-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">People</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="people-list"></div>
+            </div>
+        </div>
+
+        <!-- Camera Window -->
+        <div id="camera-window" class="draggable-window">
+            <div class="window-header">
+                <span class="window-title">Camera</span>
+                <div class="window-controls">
+                    <button class="close-button">×</button>
+                </div>
+            </div>
+            <div class="window-content">
+                <div id="camera-controls">
+                    <h3>Camera Controls</h3>
                 </div>
             </div>
         </div>
@@ -179,7 +343,7 @@
         
         <div id="chat-container">
             <div id="chat-input" class="chat-bubble" role="textbox" aria-multiline="false" spellcheck="true">
-                <span class="chat-prefix" contenteditable="false">P1: </span>
+                <span class="chat-prefix" contenteditable="false">Name: </span>
                 <span class="chat-content" contenteditable="true"></span>
             </div>
         </div>
@@ -194,5 +358,58 @@
             });
         }
     </script>
+    <!-- Commands Window -->
+    <div id="commands-window" class="draggable-window" style="display: none;">
+        <div class="window-header">
+            <div class="window-title">🔍 Commands</div>
+            <div class="window-controls">
+                <button class="close-button">×</button>
+            </div>
+        </div>
+        <div class="window-content" style="padding: 16px;">
+            <h3>Available Commands</h3>
+            <div class="command-list" style="display: grid; gap: 8px;">
+                <div class="command-item">
+                    <code>/commands</code> or <code>/help</code> - Show this commands list
+                </div>
+                <div class="command-item">
+                    <code>/coords</code>, <code>/pos</code>, <code>/loc</code> - Show current coordinates
+                </div>
+                <div class="command-item">
+                    <code>/inventory</code>, <code>/inv</code>, <code>/i</code> - Open inventory
+                </div>
+                <div class="command-item">
+                    <code>/shop</code>, <code>/s</code> - Open shop
+                </div>
+                <div class="command-item">
+                    <code>/avatar</code>, <code>/char</code> - Open avatar editor
+                </div>
+                <div class="command-item">
+                    <code>/settings</code>, <code>/config</code> - Open settings
+                </div>
+                <div class="command-item">
+                    <code>/build</code>, <code>/b</code> - Open build tools
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coordinates Window -->
+    <div id="coords-window" class="draggable-window" style="display: none;">
+        <div class="window-header">
+            <div class="window-title">📍 Coordinates</div>
+            <div class="window-controls">
+                <button class="close-button">×</button>
+            </div>
+        </div>
+        <div class="window-content" style="padding: 16px;">
+            <div id="coords-display" style="font-family: monospace; font-size: 14px;">
+                <div>X: <span id="coord-x">0</span></div>
+                <div>Y: <span id="coord-y">0</span></div>
+                <div>Z: <span id="coord-z">0</span></div>
+                <div style="margin-top: 8px;">Facing: <span id="coord-facing">North</span></div>
+            </div>
+        </div>
+    </div>
 </body>
 </html> 

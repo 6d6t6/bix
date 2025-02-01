@@ -1,3 +1,40 @@
+// Loading screen management
+let loadingProgress = 0;
+const totalLoadingSteps = 100; // Adjust based on actual loading steps
+
+function updateLoadingProgress(progress) {
+    loadingProgress = Math.min(100, progress);
+    const progressBar = document.querySelector('.progress-bar');
+    if (progressBar) {
+        progressBar.style.width = `${loadingProgress}%`;
+    }
+}
+
+function hideLoadingScreen() {
+    const loadingScreen = document.getElementById('loading-screen');
+    if (loadingScreen) {
+        loadingScreen.style.opacity = '0';
+        setTimeout(() => {
+            loadingScreen.style.display = 'none';
+        }, 500);
+    }
+}
+
+// Initialize loading
+document.addEventListener('DOMContentLoaded', () => {
+    // Simulate loading progress (replace with actual loading events)
+    let progress = 0;
+    const loadingInterval = setInterval(() => {
+        progress += 5;
+        updateLoadingProgress(progress);
+        
+        if (progress >= 100) {
+            clearInterval(loadingInterval);
+            hideLoadingScreen();
+        }
+    }, 100);
+});
+
 class Avatar {
     constructor(game, gridSize) {
         this.game = game;  // Store the game instance
@@ -6,17 +43,31 @@ class Avatar {
         this.position = { x: 0, y: 0, z: 0 };
         this.cardinalOrientation = 'north';    // Default orientation for N,E,S,W
         this.intercardinalOrientation = 'north'; // Default orientation for NE,SE,SW,NW
-        this.targetRotation = 0;
-        this.currentRotation = 0;
+        this.targetRotation = 0;  // 0 radians = facing South
+        this.currentRotation = 0; // Start facing South
         this.activeKeys = new Set();  // Track active movement keys
-        this.lastMovementDir = null;  // Store last movement direction
+        this.lastMovementDir = 'S';  // Initialize facing South to match default camera
         this.movementBuffer = null;  // Store buffered movement
         this.movementTimeout = null; // Store timeout ID
         this.MOVEMENT_DELAY = 50;    // 50ms delay to detect multi-key presses
-        this.lastCameraAngle = 0;    // Store last camera angle
+        this.lastCameraAngle = 5 * Math.PI / 4;    // Initialize to match game's default camera angle
+        
+        // Setup paperdoll view
+        this.setupPaperdollView();
         
         // Avatar parts
         this.parts = {
+            head: null,
+            face: null,
+            body: null,
+            leftArm: null,
+            rightArm: null,
+            leftLeg: null,
+            rightLeg: null
+        };
+        
+        // Create clone parts for paperdoll
+        this.paperdollParts = {
             head: null,
             face: null,
             body: null,
@@ -44,6 +95,38 @@ class Avatar {
         this.createAvatar();
     }
 
+    setupPaperdollView() {
+        // Create a separate scene for paperdoll
+        this.paperdollScene = new THREE.Scene();
+        this.paperdollScene.background = null; // Transparent background
+
+        // Create paperdoll camera
+        const aspect = 1; // Square view
+        const d = 1.5; // Adjust this to frame the avatar properly
+        this.paperdollCamera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 0.1, 10);
+        
+        // Position camera to look at avatar's front
+        this.paperdollCamera.position.set(0, 1, 3);
+        this.paperdollCamera.lookAt(0, 1, 0);
+
+        // Create paperdoll renderer
+        this.paperdollRenderer = new THREE.WebGLRenderer({
+            canvas: document.getElementById('paperdoll-canvas'),
+            alpha: true,
+            antialias: true
+        });
+        this.paperdollRenderer.setSize(150, 150);
+        this.paperdollRenderer.setClearColor(0x000000, 0);
+
+        // Add lighting to paperdoll scene
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        this.paperdollScene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(1, 2, 3);
+        this.paperdollScene.add(directionalLight);
+    }
+
     createAvatar() {
         // Create avatar parts
         const headGeometry = new THREE.BoxGeometry(0.45, 0.45, 0.45);
@@ -51,10 +134,39 @@ class Avatar {
         const armGeometry = new THREE.BoxGeometry(0.2, 0.6, 0.2);
         const legGeometry = new THREE.BoxGeometry(0.2, 0.5, 0.2);
 
-        // Materials
-        const skinMaterial = new THREE.MeshStandardMaterial({ color: this.colors.skin });
-        const shirtMaterial = new THREE.MeshStandardMaterial({ color: this.colors.shirt });
-        const pantsMaterial = new THREE.MeshStandardMaterial({ color: this.colors.pants });
+        // Materials with better lighting properties
+        const skinMaterial = new THREE.MeshPhysicalMaterial({ 
+            color: this.colors.skin,
+            roughness: 0.3,
+            metalness: 0.0,
+            reflectivity: 0.1,
+            clearcoat: 0.5,
+            clearcoatRoughness: 0.3,
+            envMapIntensity: 1,
+            transmission: 0.6,
+        });
+
+        const shirtMaterial = new THREE.MeshPhysicalMaterial({ 
+            color: this.colors.shirt,
+            roughness: 0.3,
+            metalness: 0.0,
+            reflectivity: 0.1,
+            clearcoat: 0.5,
+            clearcoatRoughness: 0.3,
+            envMapIntensity: 1,
+            transmission: 0.6,
+        });
+
+        const pantsMaterial = new THREE.MeshPhysicalMaterial({ 
+            color: this.colors.pants,
+            roughness: 0.3,
+            metalness: 0.0,
+            reflectivity: 0.1,
+            clearcoat: 0.05,
+            clearcoatRoughness: 0.3,
+            envMapIntensity: 1,
+            transmission: 0.6,
+        });
         
         // Create face features
         const faceGeometry = new THREE.PlaneGeometry(0.45, 0.45);
@@ -76,9 +188,20 @@ class Avatar {
         ctx.fillRect(40, 88, 36, 4);
 
         const faceTexture = new THREE.CanvasTexture(faceCanvas);
-        const faceMaterial = new THREE.MeshBasicMaterial({ map: faceTexture });
+        const faceMaterial = new THREE.MeshPhysicalMaterial({ 
+            map: faceTexture,
+            transparent: false,
+            side: THREE.FrontSide,
+            roughness: 0.3,
+            metalness: 0.0,
+            reflectivity: 0.1,
+            clearcoat: 0.5,
+            clearcoatRoughness: 0.3,
+            envMapIntensity: 1,
+            transmission: 0.6,
+        });
 
-        // Create mesh parts
+        // Create mesh parts for main avatar
         this.parts.head = new THREE.Mesh(headGeometry, skinMaterial);
         this.parts.face = new THREE.Mesh(faceGeometry, faceMaterial);
         this.parts.body = new THREE.Mesh(bodyGeometry, shirtMaterial);
@@ -87,28 +210,46 @@ class Avatar {
         this.parts.leftLeg = new THREE.Mesh(legGeometry, pantsMaterial);
         this.parts.rightLeg = new THREE.Mesh(legGeometry, pantsMaterial);
 
-        // Position parts relative to center
-        // Legs start at y=0 to be truly flush with floor
-        this.parts.leftLeg.position.set(-0.1, -0.25, 0);
-        this.parts.rightLeg.position.set(0.1, -0.25, 0);
-        
-        // Body starts right above legs
-        this.parts.body.position.y = 0.3;  // 0.5 (legs height) + 0.3 (half body height)
-        this.parts.leftArm.position.set(-0.325, 0.3, 0);
-        this.parts.rightArm.position.set(0.325, 0.3, 0);
-        
-        // Head at top
-        this.parts.head.position.y = 0.85;  // 0.55 (body pos) + 0.3 (half body) + 0.225 (half head)
-        this.parts.face.position.set(0, 0.85, 0.23);
+        // Create mesh parts for paperdoll (cloned from main avatar)
+        this.paperdollParts.head = this.parts.head.clone();
+        this.paperdollParts.face = this.parts.face.clone();
+        this.paperdollParts.body = this.parts.body.clone();
+        this.paperdollParts.leftArm = this.parts.leftArm.clone();
+        this.paperdollParts.rightArm = this.parts.rightArm.clone();
+        this.paperdollParts.leftLeg = this.parts.leftLeg.clone();
+        this.paperdollParts.rightLeg = this.parts.rightLeg.clone();
 
-        // Create avatar group
+        // Position parts relative to center for both avatars
+        const positionParts = (parts) => {
+            parts.leftLeg.position.set(-0.1, -0.25, 0);
+            parts.rightLeg.position.set(0.1, -0.25, 0);
+            parts.body.position.y = 0.3;
+            parts.leftArm.position.set(-0.325, 0.3, 0);
+            parts.rightArm.position.set(0.325, 0.3, 0);
+            parts.head.position.y = 0.85;
+            parts.face.position.set(0, 0.85, 0.23);
+        };
+
+        positionParts(this.parts);
+        positionParts(this.paperdollParts);
+
+        // Create groups for both avatars
         this.group = new THREE.Group();
+        this.paperdollGroup = new THREE.Group();
+
+        // Add parts to groups
         Object.values(this.parts).forEach(part => {
             if (part) this.group.add(part);
         });
 
-        // Add to scene
+        Object.values(this.paperdollParts).forEach(part => {
+            if (part) this.paperdollGroup.add(part);
+        });
+
+        // Add to respective scenes
         this.scene.add(this.group);
+        this.paperdollScene.add(this.paperdollGroup);
+
         this.updatePosition();
     }
 
@@ -334,11 +475,11 @@ class Avatar {
         // Update chat bubbles if any exist
         if (this.chatBubbles.length > 0) {
             const currentTime = Date.now();
-            const deltaTime = Math.min((currentTime - this.lastAnimationTime) / 1000, 0.1); // Cap delta time
+            const deltaTime = Math.min((currentTime - this.lastAnimationTime) / 1000, 0.1);
             this.lastAnimationTime = currentTime;
 
             // Update float offsets for all bubbles
-            const floatSpeed = 3; // pixels per second
+            const floatSpeed = 3;
             this.chatBubbles.forEach((bubbleData, index) => {
                 if (index === 0) {
                     bubbleData.floatOffset = Math.min(0, bubbleData.floatOffset - floatSpeed * deltaTime);
@@ -351,24 +492,26 @@ class Avatar {
 
             this.updateChatBubblesPosition(zoomLevel);
         }
-    }
 
-    setColor(part, color) {
-        if (this.colors[part] !== undefined) {
-            this.colors[part] = color;
-            this.updateColors();
-        }
+        // Render paperdoll view
+        this.paperdollRenderer.render(this.paperdollScene, this.paperdollCamera);
     }
 
     updateColors() {
-        this.parts.head.material.color.setHex(this.colors.skin);
-        this.parts.body.material.color.setHex(this.colors.shirt);
-        this.parts.leftArm.material.color.setHex(this.colors.shirt);
-        this.parts.rightArm.material.color.setHex(this.colors.shirt);
-        this.parts.leftLeg.material.color.setHex(this.colors.pants);
-        this.parts.rightLeg.material.color.setHex(this.colors.pants);
+        const updateMeshColors = (parts) => {
+            parts.head.material.color.setHex(this.colors.skin);
+            parts.body.material.color.setHex(this.colors.shirt);
+            parts.leftArm.material.color.setHex(this.colors.shirt);
+            parts.rightArm.material.color.setHex(this.colors.shirt);
+            parts.leftLeg.material.color.setHex(this.colors.pants);
+            parts.rightLeg.material.color.setHex(this.colors.pants);
+        };
 
-        // Update face texture
+        // Update both main avatar and paperdoll colors
+        updateMeshColors(this.parts);
+        updateMeshColors(this.paperdollParts);
+
+        // Update face texture for both avatars
         const faceCanvas = document.createElement('canvas');
         faceCanvas.width = 128;
         faceCanvas.height = 128;
@@ -386,10 +529,19 @@ class Avatar {
         // Draw mouth
         ctx.fillRect(40, 88, 36, 4);
 
-        // Update the face texture
+        // Update the face texture for both avatars
         const faceTexture = new THREE.CanvasTexture(faceCanvas);
         this.parts.face.material.map = faceTexture;
         this.parts.face.material.needsUpdate = true;
+        this.paperdollParts.face.material.map = faceTexture;
+        this.paperdollParts.face.material.needsUpdate = true;
+    }
+
+    setColor(part, color) {
+        if (this.colors[part] !== undefined) {
+            this.colors[part] = color;
+            this.updateColors();
+        }
     }
 
     setCardinalOrientation(orientation) {
@@ -401,14 +553,14 @@ class Avatar {
     }
 
     formatMessage(message) {
-        // First escape any HTML to prevent XSS
-        let escaped = message.replace(/[&<>"']/g, char => ({
-            '&': '&amp;',
+        // First escape any HTML to prevent XSS, but preserve our allowed formatting tags
+        let escaped = message.replace(/[<>]/g, m => {
+            if (/<(\/?)(?:b|i|u|s)>/.test(m)) return m;
+            return {
             '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
-        })[char]);
+                '>': '&gt;'
+            }[m];
+        });
 
         // Convert emoji shortcodes to actual emoji characters using emoji-toolkit
         escaped = joypixels.shortnameToUnicode(escaped);
@@ -425,13 +577,7 @@ class Avatar {
             }
         }
 
-        // Then apply markdown-style formatting
-        return escaped
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')  // **bold**
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')             // *italic*
-            .replace(/\_\_(.+?)\_\_/g, '<u>$1</u>')           // __underline__
-            .replace(/\~\~(.+?)\~\~/g, '<s>$1</s>')          // ~~strikethrough~~
-            .replace(/\|\|(.+?)\|\|/g, '<span class="spoiler">$1</span>'); // ||spoiler||
+        return escaped;
     }
 
     showChatMessage(message) {
@@ -439,21 +585,13 @@ class Avatar {
         const bubble = document.createElement('div');
         bubble.className = 'chat-bubble';
         
-        // Format the message but keep the prefix as-is
-        const formattedMessage = this.formatMessage(message);
-        bubble.innerHTML = `<span style="font-weight: bold; */margin-right: 1ch;*/">P1: </span>${formattedMessage}`;
+        // Use the message HTML directly, prefix is still escaped
+        bubble.innerHTML = `<span style="font-variation-settings: 'wght' 700; text-shadow: 0.25px 0px 0px, -0.25px 0px 0px, 0px 0.25px 0px, 0px -0.25px 0px;">${this.game.displayName}: </span>${message}`;
         
         // Parse emojis in the bubble
         twemoji.parse(bubble, {
             folder: 'svg',
             ext: '.svg'
-        });
-        
-        // Add click handlers for spoilers
-        bubble.querySelectorAll('.spoiler').forEach(spoiler => {
-            spoiler.addEventListener('click', () => {
-                spoiler.classList.add('revealed');
-            });
         });
 
         document.body.appendChild(bubble);
@@ -562,14 +700,57 @@ class Avatar {
 
 class BixGame {
     constructor() {
+        // Initialize display name
+        this.displayName = localStorage.getItem('displayName') || null;
+        
+        // Show display name modal if not set
+        if (!this.displayName) {
+            const modal = document.getElementById('display-name-modal');
+            const input = document.getElementById('display-name-input');
+            const submit = document.getElementById('display-name-submit');
+            
+            modal.style.display = 'block';
+            input.focus();
+            
+            submit.addEventListener('click', () => {
+                const name = input.value.trim();
+                if (name) {
+                    this.displayName = name;
+                    localStorage.setItem('displayName', name);
+                    modal.style.display = 'none';
+                    this.initializeGame();
+                }
+            });
+            
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    submit.click();
+                }
+            });
+        } else {
+            this.initializeGame();
+        }
+    }
+
+    initializeGame() {
+        // Initialize Three.js scene
+        this.scene = new THREE.Scene();
+        
         this.blocks = {};
         this.mouse = new THREE.Vector2();
         this.raycaster = new THREE.Raycaster();
         this.gridSize = 32;
-        this.cameraAngle = 5 *Math.PI / 4;  // 45 degrees
+        this.cameraAngle = 5 *Math.PI / 4;          // 45 degrees
         this.targetCameraAngle = this.cameraAngle;
-        this.isInventoryDragging = false;  // Initialize the dragging flag
-        this.chatMessages = [];  // Store chat messages
+        this.isInventoryDragging = false;           // Initialize the dragging flag
+        this.chatMessages = [];                     // Store chat messages
+
+        // Add click handler for paperdoll view
+        const paperdollCanvas = document.getElementById('paperdoll-canvas');
+        paperdollCanvas.addEventListener('click', () => {
+            this.showWindow('avatar');
+            this.setActiveWindow('avatar');
+        });
 
         // Define available block types
         this.blockTypes = {
@@ -682,8 +863,6 @@ class BixGame {
         // Initialize block selector
         this.initBlockSelector();
 
-        this.scene = new THREE.Scene();
-        
         // Set up camera with proper isometric view
         const aspect = window.innerWidth / window.innerHeight;
         const d = 20;
@@ -696,133 +875,11 @@ class BixGame {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setClearColor(0x33CCFF); // Sky blue background
         
-        // Add clock and speed control container
-        this.timeControlsContainer = document.createElement('div');
-        this.timeControlsContainer.style.position = 'fixed';
-        this.timeControlsContainer.style.bottom = '10px';
-        this.timeControlsContainer.style.left = '10px';
-        this.timeControlsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-        this.timeControlsContainer.style.color = 'white';
-        this.timeControlsContainer.style.padding = '10px';
-        this.timeControlsContainer.style.borderRadius = '5px';
-        this.timeControlsContainer.style.fontFamily = '"Victor Mono", monospace';
-        this.timeControlsContainer.style.fontSize = '16px';
-        
-        // Create clock display
-        this.clockDisplay = document.createElement('div');
-        this.clockDisplay.style.marginBottom = '10px';
-        this.timeControlsContainer.appendChild(this.clockDisplay);
-        
-        // Create speed control
-        const speedControl = document.createElement('div');
-        speedControl.style.display = 'flex';
-        speedControl.style.alignItems = 'center';
-        speedControl.style.gap = '10px';
-        speedControl.style.marginBottom = '10px';
-        
-        const speedLabel = document.createElement('label');
-        speedLabel.textContent = 'Speed:';
-        speedControl.appendChild(speedLabel);
-        
-        // Create speed slider
-        this.speedSlider = document.createElement('input');
-        this.speedSlider.type = 'range';
-        this.speedSlider.min = '1';      // 1x speed (real time)
-        this.speedSlider.max = '3600';   // 3600x speed (1 sec = 1 hour)
-        this.speedSlider.value = '1';    // Start at real time
-        this.speedSlider.style.width = '120px';
-        speedControl.appendChild(this.speedSlider);
-        
-        // Create speed display
-        this.speedDisplay = document.createElement('span');
-        this.speedDisplay.style.minWidth = '100px';
-        this.updateSpeedDisplay(1);
-        speedControl.appendChild(this.speedDisplay);
-        
-        this.timeControlsContainer.appendChild(speedControl);
-
-        // Create time control
-        const timeControl = document.createElement('div');
-        timeControl.style.display = 'flex';
-        timeControl.style.alignItems = 'center';
-        timeControl.style.gap = '10px';
-        timeControl.style.marginBottom = '10px';
-
-        // Create pause/play button
-        this.playPauseButton = document.createElement('button');
-        this.playPauseButton.style.padding = '5px 10px';
-        this.playPauseButton.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
-        this.playPauseButton.style.border = 'none';
-        this.playPauseButton.style.borderRadius = '3px';
-        this.playPauseButton.style.cursor = 'pointer';
-        this.playPauseButton.style.fontSize = '16px';
-        this.playPauseButton.style.lineHeight = '1';
-        this.playPauseButton.innerHTML = '⏸️';
-        twemoji.parse(this.playPauseButton);
-        timeControl.appendChild(this.playPauseButton);
-
-        // Create time slider
-        this.timeSlider = document.createElement('input');
-        this.timeSlider.type = 'range';
-        this.timeSlider.min = '0';       // 00:00
-        this.timeSlider.max = '1439';    // 23:59
-        this.timeSlider.value = '0';
-        this.timeSlider.style.width = '200px';  // Make it wider than speed slider
-        timeControl.appendChild(this.timeSlider);
-
-        this.timeControlsContainer.appendChild(timeControl);
-        
-        // Create reset button
-        const resetButton = document.createElement('button');
-        resetButton.textContent = 'Reset to Current Time';
-        resetButton.style.padding = '5px 10px';
-        resetButton.style.backgroundColor = 'rgba(255, 255, 255, 0.9)';
-        resetButton.style.border = 'none';
-        resetButton.style.borderRadius = '3px';
-        resetButton.style.cursor = 'pointer';
-        this.timeControlsContainer.appendChild(resetButton);
-        
-        document.body.appendChild(this.timeControlsContainer);
-        
         // Initialize game time, speed and pause state
         this.timeSpeed = 1;
         this.lastUpdateTime = Date.now();
         this.gameTime = new Date();
         this.isPaused = false;
-        
-        // Add speed control listener
-        this.speedSlider.addEventListener('input', (e) => {
-            this.timeSpeed = parseFloat(e.target.value);
-            this.updateSpeedDisplay(this.timeSpeed);
-        });
-
-        // Add time slider listener
-        this.timeSlider.addEventListener('input', (e) => {
-            if (this.isPaused) {
-                const minutes = parseInt(e.target.value);
-                const hours = Math.floor(minutes / 60);
-                const mins = minutes % 60;
-                this.gameTime.setHours(hours, mins, 0, 0);
-                this.updateDayNightCycle();
-            }
-        });
-
-        // Add play/pause button listener
-        this.playPauseButton.addEventListener('click', () => {
-            this.isPaused = !this.isPaused;
-            this.playPauseButton.innerHTML = this.isPaused ? '▶️' : '⏸️';
-            twemoji.parse(this.playPauseButton);
-            if (!this.isPaused) {
-                this.lastUpdateTime = Date.now();
-            }
-        });
-        
-        // Add reset button listener
-        resetButton.addEventListener('click', () => {
-            this.gameTime = new Date();
-            this.lastUpdateTime = Date.now();
-            this.updateTimeSlider();
-        });
         
         // Setup day/night cycle
         this.setupDayNightCycle();
@@ -876,48 +933,31 @@ class BixGame {
         this.mouse = new THREE.Vector2();
         
         // Set initial isometric camera position
-        this.rotationSpeed = 0.15; // Speed for tap rotation
-        this.panoramicSpeed = 0.015; // Very smooth, gentle rotation for held keys
+        this.rotationSpeed = 0.15;                              // Speed for tap rotation
+        this.panoramicSpeed = 0.015;                            // Very smooth, gentle rotation for held keys
         this.lastRotationDirection = 0;
         this.isRotationKeyHeld = false;
         this.rotationKeyHoldStartTime = 0;
-        this.holdThreshold = 200; // ms before considering it a hold
-        this.cameraHeight = Math.atan(1/Math.sqrt(2)); // ~35.264 degrees for isometric
+        this.holdThreshold = 200;                               // ms before considering it a hold
+        this.cameraHeight = Math.atan(1/Math.sqrt(2));          // ~35.264 degrees for isometric
         this.cameraDistance = 40;
-        this.cameraTarget = new THREE.Vector3(-0.5, 0, -0.5); // Initialize with centered offset
-        this.targetCameraTarget = this.cameraTarget.clone(); // Add target position for animation
-        this.cameraMoveSpeed = 0.1; // Speed for camera movement animation
+        this.cameraTarget = new THREE.Vector3(-0.5, 0, -0.5);   // Initialize with centered offset
+        this.targetCameraTarget = this.cameraTarget.clone();    // Add target position for animation
+        this.cameraMoveSpeed = 0.1;                             // Speed for camera movement animation
         this.zoomLevel = 1;
         this.updateCameraPosition();
         
         // Initialize avatar before starting animation
         this.avatar = new Avatar(this, this.gridSize);  // Pass 'this' instead of this.scene
         
-        // Add keyboard controls for avatar with key release handling
-        document.addEventListener('keydown', (event) => {
-            // Only process movement keys if controls are enabled and not typing in chat
-            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
-                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
-                    event.preventDefault();
-                    this.avatar.move(event.key, this.cameraAngle);
-                }
-            }
-        });
-
-        document.addEventListener('keyup', (event) => {
-            // Only process movement keys if controls are enabled and not typing in chat
-            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
-                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
-                    event.preventDefault();
-                    this.avatar.removeKey(event.key);
-                    // Recalculate movement with remaining keys
-                    if (this.avatar.activeKeys.size > 0) {
-                        this.avatar.move([...this.avatar.activeKeys][0], this.cameraAngle);
-                    }
-                }
-            }
-        });
-
+        // Set initial avatar orientations if they were loaded from settings
+        if (this.savedCardinal) {
+            this.avatar.setCardinalOrientation(this.savedCardinal);
+        }
+        if (this.savedIntercardinal) {
+            this.avatar.setIntercardinalOrientation(this.savedIntercardinal);
+        }
+        
         // Setup controls
         this.setupControls();
         
@@ -935,53 +975,60 @@ class BixGame {
         this.keys = {};
         this.controlsEnabled = true;  // Initialize controls as enabled by default
         
+        // Helper to check if an input element is focused
+        const isInputFocused = () => {
+            const activeElement = document.activeElement;
+            return (
+                activeElement.tagName === 'INPUT' ||
+                activeElement.tagName === 'TEXTAREA' ||
+                activeElement.isContentEditable ||
+                activeElement.closest('[contenteditable="true"]')
+            );
+        };
+        
         window.addEventListener('keydown', (e) => {
-            if (!e.key) return;  // Skip if no key property
+            if (!e.key) return;     // Skip if no key property
             const key = e.key.toLowerCase();
             
-            // Always handle zoom with Ctrl/Cmd + +/-
-            if (e.ctrlKey || e.metaKey) {
-                if (e.key === '=' || e.key === '+') {
-                    e.preventDefault();
-                    this.zoom(1);
-                    return;
-                } else if (e.key === '-' || e.key === '_') {
-                    e.preventDefault();
-                    this.zoom(-1);
-                    return;
+            // Always allow zoom controls
+            if ((e.ctrlKey || e.metaKey) && (key === '-' || key === '=' || key === '+')) {
+                e.preventDefault();  // Prevent browser zoom
+                if (key === '-') {
+                    this.zoom(-1);   // Zoom out
+                } else {
+                    this.zoom(1);  // Zoom in
                 }
+                return;
             }
-
-            // Only process other controls if they are enabled and not typing in chat
-            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
-                // Handle WASD for camera movement
-                if (['w', 'a', 's', 'd'].includes(key)) {
-                    this.keys[key] = true;
+            
+            // Handle arrow keys for avatar movement only when not in text input
+            if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+                if (!isInputFocused()) {
+                    e.preventDefault(); // Prevent scrolling
+                    this.avatar.move(e.key, this.cameraAngle);
                 }
-                
-                // Only trigger rotation keys on initial keydown
-                if (!this.keys[key]) {
-                    this.keys[key] = true;
-                    
-                    // Handle rotation keys
-                    if (key === 'q' || key === 'e') {
-                        const direction = key === 'q' ? -1 : 1;
+                return;
+            }
+            
+            // If an input is focused, don't handle any other game controls
+            if (isInputFocused()) {
+                return;
+            }
+            
+            this.keys[key] = true;
+            
+            // Only process controls if they are enabled
+            if (this.controlsEnabled) {
+                // Handle rotation
+                if (key === 'q' || key === 'e') {
+                    if (!this.isRotationKeyHeld) {
+                        this.isRotationKeyHeld = true;
                         this.rotationKeyHoldStartTime = Date.now();
-                        this.rotate(direction);
+                        this.lastRotationDirection = key === 'q' ? -1 : 1;
+                        
+                        // Instant tap rotation
+                        this.rotate(this.lastRotationDirection);
                     }
-                    
-                    // Handle centering camera
-                    if (key === 'c') {
-                        this.centerCamera();
-                    }
-
-                    // Handle block selection with number keys
-                    Object.entries(this.blockTypes).forEach(([type, data]) => {
-                        if (e.key === data.key) {
-                            this.selectedBlockType = type;
-                            this.updateBlockSelector();
-                        }
-                    });
                 }
             }
         });
@@ -991,8 +1038,26 @@ class BixGame {
             const key = e.key.toLowerCase();
             this.keys[key] = false;
             
-            // Only process controls if they are enabled and not typing in chat
-            if (this.controlsEnabled && (!document.activeElement || !document.activeElement.closest('#chat-input'))) {
+            // Handle arrow keys for avatar movement only when not in text input
+            if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+                if (!isInputFocused()) {
+                    e.preventDefault();
+                    this.avatar.removeKey(e.key);
+                    // Recalculate movement with remaining keys
+                    if (this.avatar.activeKeys.size > 0) {
+                        this.avatar.move([...this.avatar.activeKeys][0], this.cameraAngle);
+                    }
+                }
+                return;
+            }
+            
+            // If an input is focused, don't handle any other game controls
+            if (isInputFocused()) {
+                return;
+            }
+            
+            // Only process controls if they are enabled
+            if (this.controlsEnabled) {
                 // Handle rotation key release
                 if (key === 'q' || key === 'e') {
                     const holdDuration = Date.now() - this.rotationKeyHoldStartTime;
@@ -1009,6 +1074,8 @@ class BixGame {
                         this.lastRotationDirection = direction;
                         this.rotationSpeed = 0.15; // Reset to fast rotation for snapping
                     }
+                    
+                    this.isRotationKeyHeld = false;
                 }
             }
         });
@@ -1305,32 +1372,69 @@ class BixGame {
             inventory: {
                 id: 'inventory-window',
                 icon: '📦',
-                title: 'Inventory'
-            },
-            shop: {
-                id: 'shop-window',
-                icon: '🛍️',
-                title: 'Shop'
+                title: 'Inventory',
+                showInDock: true
             },
             buildTools: {
                 id: 'build-tools-window',
                 icon: '🏗️',
-                title: 'Build Tools'
+                title: 'Build Tools',
+                showInDock: true
+            },
+            shop: {
+                id: 'shop-window',
+                icon: '🛍️',
+                title: 'Shop',
+                showInDock: true
+            },
+            camera: {
+                id: 'camera-window',
+                icon: '📸',
+                title: 'Camera',
+                showInDock: true
+            },
+            navigator: {
+                id: 'navigator-window',
+                icon: '🌐',
+                title: 'Navigator',
+                showInDock: true
             },
             messages: {
                 id: 'messages-window',
                 icon: '💬',
-                title: 'Messages'
+                title: 'Messages',
+                showInDock: true
+            },
+            people: {
+                id: 'people-window',
+                icon: '👥',
+                title: 'People',
+                showInDock: true
             },
             avatar: {
                 id: 'avatar-window',
-                icon: '👤',
-                title: 'Character'
+                icon: '👚',
+                title: 'Avatar',
+                showInDock: true
             },
             settings: {
                 id: 'settings-window',
                 icon: '⚙️',
-                title: 'Settings'
+                title: 'Settings',
+                showInDock: true
+            },
+            // Add new command-only windows
+            commands: {
+                id: 'commands-window',
+                icon: '🔍',
+                title: 'Commands',
+                showInDock: false
+            },
+            coords: {
+                id: 'coords-window',
+                icon: '📍',
+                title: 'Coordinates',
+                showInDock: false
             }
         };
 
@@ -1340,22 +1444,30 @@ class BixGame {
         // Initialize dock
         const dockContent = document.getElementById('dock-content');
         
-        // Create dock icons for all windows
+        // Create dock icons only for windows that should show in dock
         Object.entries(this.windows).forEach(([key, window]) => {
-            const dockItem = document.createElement('div');
-            dockItem.className = 'dock-item';
-            dockItem.innerHTML = `<span style="color: white; font-size: 20px;">${window.icon}</span>`;
-            dockItem.setAttribute('data-window', key);
-            
-            // Add click handler
-            dockItem.addEventListener('click', () => {
-                this.toggleWindow(key);
-            });
-            
-            dockContent.appendChild(dockItem);
+            if (window.showInDock) {
+                const dockItem = document.createElement('div');
+                dockItem.className = 'dock-item';
+                dockItem.innerHTML = `<span style="color: white; font-size: 20px;">${window.icon}</span>`;
+                dockItem.setAttribute('data-window', key);
+                
+                // Parse emojis in the dock item
+                twemoji.parse(dockItem, {
+                    folder: 'svg',
+                    ext: '.svg'
+                });
+                
+                // Add click handler
+                dockItem.addEventListener('click', () => {
+                    this.toggleWindow(key);
+                });
+                
+                dockContent.appendChild(dockItem);
+            }
         });
 
-        // Setup all windows
+        // Setup all windows regardless of dock visibility
         Object.entries(this.windows).forEach(([key, window]) => {
             const windowElement = document.getElementById(window.id);
             const closeButton = windowElement.querySelector('.close-button');
@@ -1415,7 +1527,6 @@ class BixGame {
         if (!isVisible) {
             // If window is hidden, show it and make it active
             this.showWindow(key);
-            this.setActiveWindow(key);
         } else if (isActive) {
             // If window is visible and active, hide it
             this.hideWindow(key);
@@ -1427,7 +1538,6 @@ class BixGame {
 
     showWindow(key) {
         const windowElement = document.getElementById(this.windows[key].id);
-        const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
         
         // If the window hasn't been positioned yet, center it
         if (!windowElement.style.left || !windowElement.style.top) {
@@ -1446,27 +1556,37 @@ class BixGame {
             windowElement.style.display = 'block';
         }
 
-        dockItem.classList.add('active');
-        
-        // Add indicator
-        if (!dockItem.querySelector('.indicator')) {
-            const indicator = document.createElement('div');
-            indicator.className = 'indicator';
-            dockItem.appendChild(indicator);
+        // Only update dock item if the window is shown in dock
+        if (this.windows[key].showInDock) {
+            const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
+            dockItem.classList.add('active');
+            
+            // Add indicator
+            if (!dockItem.querySelector('.indicator')) {
+                const indicator = document.createElement('div');
+                indicator.className = 'indicator';
+                dockItem.appendChild(indicator);
+            }
         }
+
+        // Set window as active
+        this.setActiveWindow(key);
     }
 
     hideWindow(key) {
         const windowElement = document.getElementById(this.windows[key].id);
-        const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
-        
         windowElement.style.display = 'none';
-        dockItem.classList.remove('active');
-        
-        // Remove indicator
-        const indicator = dockItem.querySelector('.indicator');
-        if (indicator) {
-            indicator.remove();
+
+        // Only update dock item if the window is shown in dock
+        if (this.windows[key].showInDock) {
+            const dockItem = document.querySelector(`.dock-item[data-window="${key}"]`);
+            dockItem.classList.remove('active');
+            
+            // Remove indicator
+            const indicator = dockItem.querySelector('.indicator');
+            if (indicator) {
+                indicator.remove();
+            }
         }
 
         // If this was the active window, clear active state
@@ -1952,10 +2072,61 @@ class BixGame {
     initSettings() {
         const cardinalSelect = document.getElementById('cardinal-movement');
         const intercardinalSelect = document.getElementById('intercardinal-movement');
+        const displayNameInput = document.getElementById('display-name-setting');
+        const saveDisplayNameBtn = document.getElementById('save-display-name');
+        
+        // Load saved movement settings
+        this.savedCardinal = localStorage.getItem('cardinalOrientation') || 'north';
+        this.savedIntercardinal = localStorage.getItem('intercardinalOrientation') || 'north';
+        
+        // Set initial values from localStorage
+        cardinalSelect.value = this.savedCardinal;
+        intercardinalSelect.value = this.savedIntercardinal;
+        
+        // Initialize display name input with current value
+        displayNameInput.value = this.displayName;
+        saveDisplayNameBtn.disabled = true;
+        saveDisplayNameBtn.classList.add('disabled');
+        
+        // Check if name has changed and update save button state
+        const updateSaveButton = () => {
+            const newName = displayNameInput.value.trim();
+            const hasChanged = newName !== this.displayName;
+            const isEmpty = newName === '';
+            saveDisplayNameBtn.disabled = !hasChanged || isEmpty;
+            saveDisplayNameBtn.classList.toggle('disabled', !hasChanged || isEmpty);
+        };
+        
+        // Handle display name changes
+        saveDisplayNameBtn.addEventListener('click', () => {
+            const newName = displayNameInput.value.trim();
+            if (newName) {
+                this.displayName = newName;
+                localStorage.setItem('displayName', newName);
+                
+                // Update chat prefix
+                const chatPrefix = document.querySelector('.chat-prefix');
+                if (chatPrefix) {
+                    chatPrefix.textContent = `${newName}: `;
+                }
+                
+                // Update button state after save
+                updateSaveButton();
+            }
+        });
+        
+        // Check for changes on input
+        displayNameInput.addEventListener('input', updateSaveButton);
+        
+        // Allow saving with Enter key
+        displayNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !saveDisplayNameBtn.disabled) {
+                saveDisplayNameBtn.click();
+            }
+        });
         
         // Prevent letter keys from affecting dropdowns
         const preventLetterKeys = (e) => {
-            // If it's a letter key (a-z or A-Z)
             if (/^[a-zA-Z]$/.test(e.key)) {
                 e.preventDefault();
             }
@@ -1966,11 +2137,128 @@ class BixGame {
         
         // Add change listeners for both movement directions
         cardinalSelect.addEventListener('change', (e) => {
-            this.avatar.setCardinalOrientation(e.target.value);
+            const value = e.target.value;
+            this.avatar.setCardinalOrientation(value);
+            localStorage.setItem('cardinalOrientation', value);
         });
         
         intercardinalSelect.addEventListener('change', (e) => {
-            this.avatar.setIntercardinalOrientation(e.target.value);
+            const value = e.target.value;
+            this.avatar.setIntercardinalOrientation(value);
+            localStorage.setItem('intercardinalOrientation', value);
+        });
+
+        // Setup sidebar navigation
+        const sidebarItems = document.querySelectorAll('.sidebar-item');
+        sidebarItems.forEach(item => {
+            item.addEventListener('click', () => {
+                // Update active states
+                sidebarItems.forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+
+                // Show corresponding page
+                const pageId = `${item.dataset.page}-page`;
+                document.querySelectorAll('.settings-page').forEach(page => {
+                    page.classList.remove('active');
+                });
+                document.getElementById(pageId).classList.add('active');
+            });
+        });
+
+        // Move time controls to settings
+        const timeControls = document.getElementById('time-controls');
+        
+        // Create clock display
+        const clockDisplay = document.createElement('div');
+        clockDisplay.style.marginBottom = '16px';
+        clockDisplay.style.fontSize = '24px';
+        clockDisplay.style.textAlign = 'center';
+        this.clockDisplay = clockDisplay;
+        timeControls.appendChild(clockDisplay);
+        
+        // Create speed control
+        const speedControl = document.createElement('div');
+        speedControl.className = 'speed-control';
+        
+        const speedLabel = document.createElement('label');
+        speedLabel.textContent = 'Speed:';
+        speedControl.appendChild(speedLabel);
+        
+        this.speedSlider = document.createElement('input');
+        this.speedSlider.type = 'range';
+        this.speedSlider.min = '1';
+        this.speedSlider.max = '3600';
+        this.speedSlider.value = '1';
+        speedControl.appendChild(this.speedSlider);
+        
+        this.speedDisplay = document.createElement('span');
+        this.speedDisplay.className = 'speed-display';
+        this.updateSpeedDisplay(1);
+        speedControl.appendChild(this.speedDisplay);
+        
+        timeControls.appendChild(speedControl);
+
+        // Create time control
+        const timeControl = document.createElement('div');
+        timeControl.className = 'time-control';
+
+        this.playPauseButton = document.createElement('button');
+        this.playPauseButton.innerHTML = '⏸️';
+        twemoji.parse(this.playPauseButton);
+        timeControl.appendChild(this.playPauseButton);
+
+        this.timeSlider = document.createElement('input');
+        this.timeSlider.type = 'range';
+        this.timeSlider.min = '0';
+        this.timeSlider.max = '1439';
+        this.timeSlider.value = '0';
+        timeControl.appendChild(this.timeSlider);
+
+        timeControls.appendChild(timeControl);
+        
+        // Create reset button
+        const resetButton = document.createElement('button');
+        resetButton.textContent = 'Reset to Current Time';
+        timeControls.appendChild(resetButton);
+        
+        // Initialize game time, speed and pause state
+        this.timeSpeed = 1;
+        this.lastUpdateTime = Date.now();
+        this.gameTime = new Date();
+        this.isPaused = false;
+        
+        // Add speed control listener
+        this.speedSlider.addEventListener('input', (e) => {
+            this.timeSpeed = parseFloat(e.target.value);
+            this.updateSpeedDisplay(this.timeSpeed);
+        });
+
+        // Add time slider listener
+        this.timeSlider.addEventListener('input', (e) => {
+            if (this.isPaused) {
+                const minutes = parseInt(e.target.value);
+                const hours = Math.floor(minutes / 60);
+                const mins = minutes % 60;
+                this.gameTime.setHours(hours, mins, 0, 0);
+                this.updateDayNightCycle();
+            }
+        });
+
+        // Add play/pause button listener
+        this.playPauseButton.addEventListener('click', () => {
+            this.isPaused = !this.isPaused;
+            this.playPauseButton.innerHTML = this.isPaused ? '▶️' : '⏸️';
+            twemoji.parse(this.playPauseButton);
+            if (!this.isPaused) {
+                this.lastUpdateTime = Date.now();
+            }
+        });
+        
+        // Add reset button listener
+        resetButton.addEventListener('click', () => {
+            this.gameTime = new Date();
+            this.lastUpdateTime = Date.now();
+            this.updateTimeSlider();
         });
     }
 
@@ -2060,38 +2348,207 @@ class BixGame {
         const chatInput = document.getElementById('chat-input');
         const chatContent = chatInput.querySelector('.chat-content');
         const chatHistory = document.getElementById('chat-history');
+        const chatPrefix = chatInput.querySelector('.chat-prefix');
         
-        const MAX_CHARS = 100;  // Maximum characters allowed
+        // Add toolbarTimeout variable declaration
+        let toolbarTimeout = null;
 
-        // Ensure proper focus behavior
-        const ensureFocus = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
+        // Add system message helper
+        const addSystemMessage = (message) => {
+            // Create and show chat bubble for system message
+            const bubble = document.createElement('div');
+            bubble.className = 'chat-bubble system-message';
+            bubble.innerHTML = `<strong class="system-prefix">BIX:</strong> <span style="font-style: italic;">${message}</span>`;
+            document.body.appendChild(bubble);
+
+            // Create bubble data object
+            const bubbleData = {
+                element: bubble,
+                createdAt: Date.now(),
+                timeout: null,
+                floatOffset: 0
+            };
+
+            // Add to bubbles array
+            this.avatar.chatBubbles.push(bubbleData);
+
+            // Position the bubble above the avatar's head
+            this.avatar.updateChatBubblesPosition();
+
+            // Start fade out near the end
+            bubbleData.timeout = setTimeout(() => {
+                bubble.style.opacity = '0';
+                bubble.style.transition = 'opacity 2s ease';
+                
+                // Remove bubble after fade out
+                setTimeout(() => {
+                    this.avatar.removeChatBubble(bubbleData);
+                }, 2000);
+            }, 120000);  // Start fade after 2 min
             
-            // If content isn't focused, focus it and place cursor at end
-            if (document.activeElement !== chatContent) {
-                chatContent.focus();
-                // Place cursor at end of content
-                const range = document.createRange();
-                const selection = window.getSelection();
-                range.selectNodeContents(chatContent);
-                range.collapse(false);
-                selection.removeAllRanges();
-                selection.addRange(range);
+            // Add to chat history
+            const messageElement = document.createElement('div');
+            messageElement.className = 'chat-message system-message';
+            messageElement.innerHTML = `<strong class="chat-name system-prefix">BIX:</strong> <span style="font-style: italic;">${message}</span>`;
+            
+            // Parse emojis in the message
+            twemoji.parse(messageElement, {
+                folder: 'svg',
+                ext: '.svg'
+            });
+            
+            // Add timestamp
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = this.formatTime(new Date());
+            messageElement.appendChild(timestamp);
+            
+            chatHistory.appendChild(messageElement);
+            
+            // Scroll to bottom if not user scrolled
+            if (!isUserScrolled) {
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            } else {
+                newMessagesButton.classList.add('visible');
             }
         };
 
-        // Add click handlers to both the container and content
-        chatInput.addEventListener('click', ensureFocus);
-        chatContent.addEventListener('click', (e) => e.stopPropagation());
+        // Add slash command handling
+        const handleSlashCommand = (text) => {
+            const [command, ...args] = text.slice(1).toLowerCase().split(' '); // Split into command and args
+            
+            // Handle build height command
+            if (command === 'bh') {
+                const buildHeightInputs = document.querySelectorAll('input[name="build-height-mode"]');
+                const fixedHeightInput = document.getElementById('fixed-build-height');
 
-        // Handle input to enforce character limit
-        chatContent.addEventListener('input', (e) => {
-            const text = chatContent.textContent;
-            if (text.length > MAX_CHARS) {
-                e.preventDefault();
-                chatContent.textContent = text.slice(0, MAX_CHARS);
-                // Restore cursor position at the end
+                if (args.length === 0) {
+                    // Toggle build height mode
+                    if (this.buildHeightMode === 'auto') {
+                        buildHeightInputs[1].checked = true;
+                        this.buildHeightMode = 'fixed';
+                        fixedHeightInput.disabled = false;
+                        addSystemMessage('Build height set to ' + fixedHeightInput.value);
+                    } else {
+                        buildHeightInputs[0].checked = true;
+                        this.buildHeightMode = 'auto';
+                        fixedHeightInput.disabled = true;
+                        addSystemMessage('Build height turned off (auto stacking)');
+                    }
+                    return true;
+                }
+
+                const height = parseInt(args[0]);
+                if (!isNaN(height) && height >= 0 && height <= 100) {
+                    // Set fixed height mode and value
+                    buildHeightInputs[1].checked = true;
+                    this.buildHeightMode = 'fixed';
+                    fixedHeightInput.disabled = false;
+                    fixedHeightInput.value = height;
+                    this.fixedBuildHeight = height;
+                    addSystemMessage('Build height set to ' + height);
+                    return true;
+                } else {
+                    addSystemMessage('Usage: /bh [0-100] - Set build height, or /bh to toggle auto/fixed mode');
+                    return true;
+                }
+            }
+            
+            // Map of slash commands to window keys
+            const commandMap = {
+                'inventory': 'inventory',
+                'inv': 'inventory',
+                'i': 'inventory',
+                'shop': 'shop',
+                's': 'shop',
+                'avatar': 'avatar',
+                'char': 'avatar',
+                'settings': 'settings',
+                'config': 'settings',
+                'build': 'buildTools',
+                'b': 'buildTools',
+                // Add new command-only windows
+                'commands': 'commands',
+                'help': 'commands',
+                'coords': 'coords',
+                'coordinates': 'coords',
+                'pos': 'coords',
+                'position': 'coords',
+                'loc': 'coords'
+            };
+
+            const windowKey = commandMap[command];
+            if (windowKey && this.windows[windowKey]) {
+                this.showWindow(windowKey);
+                this.setActiveWindow(windowKey);
+                return true; // Command was handled
+            }
+            return false; // Command was not recognized
+        };
+
+        // Create command suggestions dropdown
+        const commandSuggestions = document.createElement('div');
+        commandSuggestions.className = 'command-suggestions';
+        commandSuggestions.style.display = 'none';
+        chatInput.parentNode.insertBefore(commandSuggestions, chatInput);
+
+        // List of available commands with descriptions
+        const commands = [
+            { command: 'bh', description: 'Toggle or set build height (0-100)' },
+            { command: 'inventory', description: 'Open inventory window' },
+            { command: 'inv', description: 'Open inventory window' },
+            { command: 'i', description: 'Open inventory window' },
+            { command: 'shop', description: 'Open shop window' },
+            { command: 's', description: 'Open shop window' },
+            { command: 'avatar', description: 'Open avatar editor' },
+            { command: 'char', description: 'Open avatar editor' },
+            { command: 'settings', description: 'Open settings window' },
+            { command: 'config', description: 'Open settings window' },
+            { command: 'build', description: 'Open build tools' },
+            { command: 'b', description: 'Open build tools' },
+            { command: 'commands', description: 'Show available commands' },
+            { command: 'help', description: 'Show available commands' },
+            { command: 'coords', description: 'Show coordinates window' },
+            { command: 'coordinates', description: 'Show coordinates window' },
+            { command: 'pos', description: 'Show coordinates window' },
+            { command: 'position', description: 'Show coordinates window' },
+            { command: 'loc', description: 'Show coordinates window' }
+        ];
+
+        // Function to update command suggestions
+        const updateCommandSuggestions = () => {
+            const text = chatContent.textContent.trim();
+            if (text.startsWith('/') && !text.startsWith(' /')) {  // Only show if slash is at the very start
+                const query = text.slice(1).toLowerCase();
+                const matches = commands.filter(cmd => 
+                    cmd.command.toLowerCase().startsWith(query)
+                );
+
+                if (matches.length > 0) {
+                    commandSuggestions.innerHTML = matches.map(cmd => `
+                        <div class="command-suggestion" data-command="${cmd.command}">
+                            <span class="command">/${cmd.command}</span>
+                            <span class="description">${cmd.description}</span>
+                        </div>
+                    `).join('');
+                    commandSuggestions.style.display = 'flex';
+                } else {
+                    commandSuggestions.style.display = 'none';
+                }
+            } else {
+                commandSuggestions.style.display = 'none';
+            }
+        };
+
+        // Handle command suggestion clicks
+        commandSuggestions.addEventListener('click', (e) => {
+            const suggestion = e.target.closest('.command-suggestion');
+            if (suggestion) {
+                const command = suggestion.dataset.command;
+                chatContent.textContent = `/${command} `;
+                commandSuggestions.style.display = 'none';
+                chatContent.focus();
+                // Place cursor at end
                 const range = document.createRange();
                 const selection = window.getSelection();
                 range.selectNodeContents(chatContent);
@@ -2101,39 +2558,34 @@ class BixGame {
             }
         });
 
-        // Prevent line breaks and handle paste
-        chatContent.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
+        // Prevent mousewheel from zooming game when over suggestions
+        commandSuggestions.addEventListener('wheel', (e) => {
+            e.stopPropagation();
+        }, { passive: true });
+
+        // Update suggestions on input
+        chatContent.addEventListener('input', updateCommandSuggestions);
+
+        // Hide suggestions when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!chatInput.contains(e.target) && !commandSuggestions.contains(e.target)) {
+                commandSuggestions.style.display = 'none';
             }
         });
 
-        // Stop paste event from bubbling up from chatInput
-        chatInput.addEventListener('paste', (e) => {
-            e.stopPropagation();
-        });
-
-        // Handle paste events, converting line breaks to spaces
-        chatContent.addEventListener('paste', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            let text = e.clipboardData.getData('text/plain');
-            // Convert line breaks to spaces, ensuring there's exactly one space between words
-            text = text.replace(/[\r\n\s]+/g, ' ').trim();
-            const currentLength = chatContent.textContent.length;
-            const availableSpace = MAX_CHARS - currentLength;
-            if (availableSpace > 0) {
-                document.execCommand('insertText', false, text.slice(0, availableSpace));
-            }
-        });
-
-        // Create new messages button
+        // Make content editable properly handle formatting
+        chatContent.contentEditable = 'true';
+        
+        // Update chat prefix with display name
+        chatPrefix.textContent = `${this.displayName}: `;
+        
+        // Create new messages button and tracking variables
         const newMessagesButton = document.createElement('button');
         newMessagesButton.className = 'new-messages-button';
         newMessagesButton.textContent = 'NEW MESSAGES';
         chatHistory.appendChild(newMessagesButton);
         
-        // Track if user has scrolled up
+        // Track scroll state
         let isUserScrolled = false;
         let lastScrollHeight = chatHistory.scrollHeight;
         
@@ -2155,29 +2607,312 @@ class BixGame {
             newMessagesButton.classList.remove('visible');
             isUserScrolled = false;
         });
+        
+        // Create formatting toolbar
+        const toolbar = document.createElement('div');
+        toolbar.className = 'chat-toolbar';
+        toolbar.style.display = 'none';
+        toolbar.innerHTML = `
+            <button data-command="bold" title="Bold"><b>B</b></button>
+            <button data-command="italic" title="Italic"><i>I</i></button>
+            <button data-command="underline" title="Underline"><u>U</u></button>
+            <button data-command="strikeThrough" title="Strikethrough"><s>S</s></button>
+            <select class="color-select" title="Text Color">
+                <option value="">Default</option>
+                <option value="#ff0000">Red</option>
+                <option value="#ff8800">Orange</option>
+                <option value="#ffff00">Yellow</option>
+                <option value="#00ff00">Green</option>
+                <option value="#88ff00">Lime</option>
+                <option value="#00ffff">Cyan</option>
+                <option value="#0000ff">Blue</option>
+                <option value="#800080">Purple</option>
+                <option value="#ff00ff">Pink</option>
+                <option value="#8b4513">Brown</option>
+            </select>
+        `;
+        chatInput.parentNode.insertBefore(toolbar, chatInput);
+
+        // Handle color selection
+        const colorSelect = toolbar.querySelector('.color-select');
+        colorSelect.addEventListener('change', () => {
+            const color = colorSelect.value;
+            if (color) {
+                document.execCommand('foreColor', false, color);
+                // Update the circle icon color
+                const svgColor = color === '#ffffff' ? 'white' : color;
+                const newSvgUrl = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7' fill='${encodeURIComponent(svgColor)}'/%3E%3C/svg%3E")`;
+                colorSelect.style.backgroundImage = newSvgUrl;
+            } else {
+                // Reset to default color
+                document.execCommand('foreColor', false, '#ffffff');
+                // Reset the circle icon to white
+                const defaultSvgUrl = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7' fill='white'/%3E%3C/svg%3E")`;
+                colorSelect.style.backgroundImage = defaultSvgUrl;
+            }
+            chatContent.focus();
+            updateToolbarStates();
+        });
+
+        // Function to update toolbar button states
+        const updateToolbarStates = () => {
+            toolbar.querySelectorAll('button').forEach(button => {
+                const command = button.dataset.command;
+                const isActive = document.queryCommandState(command);
+                button.classList.toggle('active', isActive);
+            });
+
+            // Update color select and icon
+            const currentColor = document.queryCommandValue('foreColor');
+            if (currentColor) {
+                const rgb = currentColor.match(/\d+/g);
+                if (rgb) {
+                    const hex = '#' + rgb.map(x => {
+                        const hex = parseInt(x).toString(16);
+                        return hex.length === 1 ? '0' + hex : hex;
+                    }).join('');
+                    colorSelect.value = hex;
+                    
+                    // Update the circle icon color
+                    const svgColor = hex === '#ffffff' ? 'white' : hex;
+                    const newSvgUrl = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7' fill='${encodeURIComponent(svgColor)}'/%3E%3C/svg%3E")`;
+                    colorSelect.style.backgroundImage = newSvgUrl;
+                }
+            } else {
+                // Reset color select and icon to default
+                colorSelect.value = '';
+                const defaultSvgUrl = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7' fill='white'/%3E%3C/svg%3E")`;
+                colorSelect.style.backgroundImage = defaultSvgUrl;
+            }
+        };
+
+        // Handle toolbar button clicks
+        toolbar.addEventListener('click', (e) => {
+            const button = e.target.closest('button');
+            if (!button) return;
+
+            e.preventDefault();
+            const command = button.dataset.command;
+            
+            // Execute command
+            document.execCommand(command, false, null);
+            
+            // If no text is selected, insert zero-width space
+            const selection = window.getSelection();
+            if (selection.rangeCount && selection.getRangeAt(0).collapsed) {
+                document.execCommand('insertText', false, '\u200B');
+            }
+            
+            // Update button states immediately
+            updateToolbarStates();
+            chatContent.focus();
+        });
+
+        // Show toolbar and update states when chat is focused
+        const showToolbar = () => {
+            if (toolbarTimeout) {
+                clearTimeout(toolbarTimeout);
+                toolbarTimeout = null;
+            }
+            
+            if (document.activeElement === chatContent || toolbar.contains(document.activeElement)) {
+                toolbar.style.display = 'flex';
+                updateToolbarStates();
+            }
+        };
+
+        // Event listeners for toolbar visibility and state updates
+        chatContent.addEventListener('focus', showToolbar);
+        chatContent.addEventListener('click', showToolbar);
+        chatContent.addEventListener('keyup', showToolbar);
+        chatContent.addEventListener('mouseup', showToolbar);
+        
+        document.addEventListener('selectionchange', () => {
+            if (document.activeElement === chatContent) {
+                showToolbar();
+                updateToolbarStates();
+            }
+        });
+
+        chatContent.addEventListener('blur', (e) => {
+            // Only hide if focus isn't on toolbar or its buttons
+            if (toolbarTimeout) clearTimeout(toolbarTimeout);
+            toolbarTimeout = setTimeout(() => {
+                if (!toolbar.contains(document.activeElement) && document.activeElement !== chatContent) {
+                    toolbar.style.display = 'none';
+                }
+            }, 150); // Slightly longer delay
+        });
+
+        // Clean up empty elements and handle input
+        chatContent.addEventListener('input', () => {
+            // Store current selection
+            const selection = window.getSelection();
+            const range = selection.getRangeAt(0);
+            const cursorPosition = range.startOffset;
+            const cursorNode = range.startContainer;
+            
+            // Get the full text content before the cursor
+            const getTextBeforeCursor = (node, pos) => {
+                let text = '';
+                const walker = document.createTreeWalker(chatContent, NodeFilter.SHOW_TEXT);
+                let currentNode = walker.nextNode();
+                
+                while (currentNode) {
+                    if (currentNode === node) {
+                        text += currentNode.textContent.substring(0, pos);
+                        break;
+                    }
+                    text += currentNode.textContent;
+                    currentNode = walker.nextNode();
+                }
+                return text;
+            };
+            
+            const textBeforeCursor = getTextBeforeCursor(cursorNode, cursorPosition);
+            const fullText = chatContent.textContent;
+
+            // Prevent spaces before slash command
+            if (fullText.trim().startsWith('/')) {
+                const leadingSpaces = fullText.match(/^(\s+)\//);
+                if (leadingSpaces) {
+                    chatContent.textContent = fullText.replace(/^\s+\//, '/');
+                    // Restore cursor position, adjusted for removed spaces
+                    const newPosition = Math.max(0, cursorPosition - leadingSpaces[1].length);
+                    const range = document.createRange();
+                    const textNode = chatContent.firstChild || chatContent;
+                    range.setStart(textNode, newPosition);
+                    range.setEnd(textNode, newPosition);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+            }
+            
+            // Convert emoji shortcodes
+            const convertedText = joypixels.shortnameToUnicode(fullText);
+            
+            if (convertedText !== fullText) {
+                // Calculate new cursor position based on converted text before cursor
+                const convertedBeforeCursor = joypixels.shortnameToUnicode(textBeforeCursor);
+                const newCursorPosition = convertedBeforeCursor.length;
+                
+                // Update content while preserving formatting
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = chatContent.innerHTML;
+                
+                const updateNodeText = (node) => {
+                    if (node.nodeType === 3) { // Text node
+                        node.textContent = joypixels.shortnameToUnicode(node.textContent);
+                    } else if (node.nodeType === 1) { // Element node
+                        Array.from(node.childNodes).forEach(updateNodeText);
+                    }
+                };
+                
+                updateNodeText(tempDiv);
+                chatContent.innerHTML = tempDiv.innerHTML;
+                
+                // Restore cursor position
+                const setNewCursorPosition = (node, targetPos, currentPos = 0) => {
+                    if (node.nodeType === 3) { // Text node
+                        const nodeLength = node.length;
+                        if (currentPos + nodeLength >= targetPos) {
+                            const newRange = document.createRange();
+                            const offset = Math.min(targetPos - currentPos, nodeLength);
+                            newRange.setStart(node, offset);
+                            newRange.setEnd(node, offset);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+                            return true;
+                        }
+                        return currentPos + nodeLength;
+                    } else if (node.nodeType === 1) { // Element node
+                        for (const child of node.childNodes) {
+                            const result = setNewCursorPosition(child, targetPos, currentPos);
+                            if (result === true) return true;
+                            if (typeof result === 'number') currentPos = result;
+                        }
+                    }
+                    return currentPos;
+                };
+                
+                setNewCursorPosition(chatContent, newCursorPosition);
+            }
+            
+            requestAnimationFrame(updateToolbarStates);
+            updateCommandSuggestions();
+        });
+
+        // Ensure proper focus behavior
+        const ensureFocus = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            if (document.activeElement !== chatContent) {
+                chatContent.focus();
+                const range = document.createRange();
+                const selection = window.getSelection();
+                range.selectNodeContents(chatContent);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        };
+
+        chatInput.addEventListener('click', ensureFocus);
+        chatContent.addEventListener('click', (e) => e.stopPropagation());
+
+        // Handle paste to preserve formatting
+        chatContent.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData('text/plain');
+            
+            // Get current selection
+            const selection = window.getSelection();
+            const range = selection.getRangeAt(0);
+            
+            // Delete any selected content
+            range.deleteContents();
+            
+            // Insert the text at cursor position
+            const textNode = document.createTextNode(text);
+            range.insertNode(textNode);
+            
+            // Move cursor to end of pasted text
+            range.setStartAfter(textNode);
+            range.setEndAfter(textNode);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            
+            // Trigger input event for emoji conversion
+            chatContent.dispatchEvent(new Event('input'));
+        });
 
         // Handle chat input
-        chatInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                const message = chatContent.textContent.trim();
+        chatContent.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const text = chatContent.textContent.trim();
+                const formattedHtml = chatContent.innerHTML.trim();
                 
-                if (message) {
-                    // Show floating chat bubble
-                    this.avatar.showChatMessage(message);
+                if (text) {
+                    if (text.startsWith('/') && !text.startsWith(' /')) {  // Only handle command if slash is at the very start
+                        // Handle slash command
+                        const wasHandled = handleSlashCommand(text);
+                        if (wasHandled) {
+                            chatContent.textContent = ''; // Clear input after command
+                            commandSuggestions.style.display = 'none'; // Hide suggestions
+                            return;
+                        }
+                    }
+                    
+                    // If not a command or command wasn't handled, send as chat message
+                    // Use the formatted HTML for both bubble and chat history
+                    this.avatar.showChatMessage(`${formattedHtml}`);
                     
                     // Add message to chat history
-                    const messageObj = {
-                        sender: 'P1',
-                        content: message,
-                        timestamp: new Date()
-                    };
-                    this.chatMessages.push(messageObj);
-                    
-                    // Create and append message element
                     const messageElement = document.createElement('div');
-                    messageElement.className = 'chat-message';
-                    messageElement.innerHTML = `<span style="font-weight: bold;">P1: </span>${this.avatar.formatMessage(message)}`;
+                    messageElement.className = 'chat-message player-message';
+                    messageElement.innerHTML = `<span class="chat-name" style="color: ${this.displayNameColor};">${this.displayName}:</span> ${formattedHtml}`;
                     
                     // Parse emojis in the message
                     twemoji.parse(messageElement, {
@@ -2185,26 +2920,23 @@ class BixGame {
                         ext: '.svg'
                     });
                     
-                    // Add click handlers for spoilers in the chat history
-                    messageElement.querySelectorAll('.spoiler').forEach(spoiler => {
-                        spoiler.addEventListener('click', () => {
-                            spoiler.classList.add('revealed');
-                        });
-                    });
+                    // Add timestamp
+                    const timestamp = document.createElement('div');
+                    timestamp.className = 'timestamp';
+                    timestamp.textContent = this.formatTime(new Date());
+                    messageElement.appendChild(timestamp);
                     
                     chatHistory.appendChild(messageElement);
                     
-                    // Handle scrolling behavior
+                    // Scroll to bottom if not user scrolled
                     if (!isUserScrolled) {
                         chatHistory.scrollTop = chatHistory.scrollHeight;
-                    } else if (chatHistory.scrollHeight > lastScrollHeight) {
+                    } else {
                         newMessagesButton.classList.add('visible');
                     }
                     
-                    lastScrollHeight = chatHistory.scrollHeight;
-                    
-                    // Clear input
-                    chatContent.textContent = '';
+                    chatContent.textContent = ''; // Clear input after sending
+                    commandSuggestions.style.display = 'none'; // Hide suggestions
                 }
             }
         });
@@ -2225,11 +2957,22 @@ class BixGame {
         chatInput.addEventListener('focusout', enableControls);
         chatContent.addEventListener('focusout', enableControls);
 
-        // Handle paste to strip formatting
-        chatInput.addEventListener('paste', (e) => {
-            e.preventDefault();
-            const text = e.clipboardData.getData('text/plain');
-            document.execCommand('insertText', false, text);
+        // Add keyboard shortcut handler
+        chatContent.addEventListener('keydown', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                const key = e.key.toLowerCase();
+                if (['b', 'i', 'u', 's'].includes(key)) {
+                    e.preventDefault();
+                    const commands = {
+                        'b': 'bold',
+                        'i': 'italic',
+                        'u': 'underline',
+                        's': 'strikeThrough'
+                    };
+                    document.execCommand(commands[key], false, null);
+                    updateToolbarStates();
+                }
+            }
         });
     }
 
@@ -2257,6 +3000,9 @@ class BixGame {
         
         // Update avatar rotation
         this.avatar.animate(this.zoomLevel);
+        
+        // Update coordinates display if window is open
+        this.updateCoordsDisplay();
         
         // Check for held rotation keys only if controls are enabled
         if (this.controlsEnabled && (this.keys['q'] || this.keys['e'])) {
@@ -2288,7 +3034,7 @@ class BixGame {
             
             // Apply smooth rotation
             if (Math.abs(angleDiff) > 0.01) {
-                this.cameraAngle += angleDiff * this.rotationSpeed;
+                this.cameraAngle += angleDiff * 0.5;
                 this.cameraAngle = (this.cameraAngle + Math.PI * 2) % (Math.PI * 2);
                 this.updateCameraPosition();
             } else {
@@ -2317,6 +3063,39 @@ class BixGame {
 
         this.updateCamera();
         this.renderer.render(this.scene, this.camera);
+    }
+
+    updateCoordsDisplay() {
+        const coordsWindow = document.getElementById('coords-window');
+        if (coordsWindow.style.display === 'block') {
+            const x = document.getElementById('coord-x');
+            const y = document.getElementById('coord-y');
+            const z = document.getElementById('coord-z');
+            const facing = document.getElementById('coord-facing');
+            
+            // Update position
+            // X stays the same (left/right)
+            x.textContent = Math.round(this.avatar.position.x);
+            // Display Y as height (up/down)
+            y.textContent = Math.round(this.avatar.position.y);
+            // Display Z with reversed sign to match expected direction
+            z.textContent = Math.round(-this.avatar.position.z);
+            
+            // Update facing direction - fix the reversed directions
+            const directionMap = {
+                'N': 'S',
+                'S': 'N',
+                'E': 'W',
+                'W': 'E',
+                'NE': 'SW',
+                'NW': 'SE',
+                'SE': 'NW',
+                'SW': 'NE'
+            };
+            
+            const rawDirection = this.avatar.lastMovementDir || 'N';
+            facing.textContent = directionMap[rawDirection] || rawDirection;
+        }
     }
 }
 
